@@ -20,7 +20,11 @@ xcodebuild -project PhotoViewer.xcodeproj -scheme PhotoViewer -derivedDataPath b
 open build/Build/Products/Debug/PhotoViewer.app
 ```
 
-テスト用の写真は `swift Scripts/generate_testdata.swift TestData` で生成する（`TestData/` は git 管理外）。
+テスト用の写真は `swift Scripts/generate_testdata.swift ~/Library/Caches/PhotoViewerTestData` で生成する。
+`TestData` はそこへのシンボリックリンク（git 管理外）。
+- デスクトップ配下はアクセス許可（TCC）の対象で、ad-hoc 署名だとビルドのたびに許可ダイアログが出て読み込みが止まる。そのため、テストデータはデスクトップの外に置く。
+- 外付け HDD（/Volumes/LaCie_d2）の実写真は**読み取り専用**で性能確認に使う。レーティングやリネームなどの書き込みテストは必ず TestData で行う。
+- 性能計測：`PV_PERF=1 build/Build/Products/Debug/PhotoViewer.app/Contents/MacOS/PhotoViewer` で起動すると、最初のサムネイルが出るまでの時間を標準エラー出力に出す。
 
 ## 技術的な決定事項
 | 項目 | 決定 |

@@ -26,6 +26,14 @@ struct ContentView: View {
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .onAppear { browser.restoreLastFolder() }
+        .alert("エラー", isPresented: Binding(
+            get: { browser.alertMessage != nil },
+            set: { if !$0 { browser.alertMessage = nil } }
+        )) {
+            Button("OK") { browser.alertMessage = nil }
+        } message: {
+            Text(browser.alertMessage ?? "")
+        }
     }
 
     private var subtitle: String {
@@ -50,6 +58,10 @@ struct ContentView: View {
                                                columns: columns, showNames: showNames),
                 onSelectionChange: { browser.updateSelection($0, lastAdded: $1) },
                 onOpen: { settings.open($0) },
+                tagsFor: { browser.tags(for: $0) },
+                tagsVersion: browser.tagsVersion,
+                onRate: { browser.setRating($1, for: $0) },
+                onToggleDeveloped: { browser.toggleDeveloped(for: $0) },
                 contextMenu: { urls in GridContextMenu.make(for: urls, settings: settings) }
             )
             .overlay {

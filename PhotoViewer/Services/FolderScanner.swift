@@ -6,20 +6,42 @@ enum FolderScanner {
         .isRegularFileKey, .fileSizeKey, .contentModificationDateKey,
     ]
 
+    struct ScanResult: Sendable {
+        var items: [PhotoItem]
+        /// 拡張子を除いたパス（小文字）→ 実在するサイドカーの URL
+        var sidecars: [String: URL]
+    }
+
+    static func sidecarKey(_ url: URL) -> String {
+        url.deletingPathExtension().path.lowercased()
+    }
+
+    /// 写真とサイドカー（.xmp）を列挙する
+    static func scan(_ folder: URL, recursive: Bool = false) -> ScanResult {
+        var sidecars: [String: URL] = [:]
+        let items = scanPhotos(in: folder, recursive: recursive) { u in
+            if u.pathExtension.lowercased() == "xmp" { sidecars[sidecarKey(u)] = u }
+        }
+        return ScanResult(items: items, sidecars: sidecars)
+    }
+
     /// フォルダ直下（recursive なら配下すべて）の対応ファイルを列挙する
-    static func scanPhotos(in folder: URL, recursive: Bool = false) -> [PhotoItem] {
+    /// - Parameter other: 対応形式以外のファイルを受け取る（サイドカー収集用）
+    static func scanPhotos(in folder: URL, recursive: Bool = false, other: (URL) -> Void = { _ in }) -> [PhotoItem] {
         let fm = FileManager.default
         var urls: [URL] = []
         if recursive {
             let e = fm.enumerator(at: folder, includingPropertiesForKeys: fileKeys,
                                   options: [.skipsHiddenFiles, .skipsPackageDescendants])
             while let u = e?.nextObject() as? URL {
-                if SupportedFormats.isSupported(u) { urls.append(u) }
+                if SupportedFormats.isSupported(u) { urls.append(u) } else { other(u) }
             }
         } else {
-            urls = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: fileKeys,
-                                                options: [.skipsHiddenFiles, .skipsPackageDescendants])) ?? []
-            urls = urls.filter(SupportedFormats.isSupported)
+            let all = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: fileKeys,
+                                                   options: [.skipsHiddenFiles, .skipsPackageDescendants])) ?? []
+            for u in all {
+                if SupportedFormats.isSupported(u) { urls.append(u) } else { other(u) }
+            }
         }
         var items: [PhotoItem] = []
         items.reserveCapacity(urls.count)

@@ -16,6 +16,13 @@ struct PhotoGridView: NSViewRepresentable {
     var layoutConfig: GridLayoutConfig
     var onSelectionChange: (Set<URL>, URL?) -> Void
     var onOpen: ([URL]) -> Void
+    /// レーティング・現像済みの取得と、変更の合図
+    var tagsFor: (URL) -> PhotoTags
+    var tagsVersion: Int
+    /// 数字キー 0〜5 でレーティング
+    var onRate: ([URL], Int) -> Void
+    /// D キーで現像済みを切り替え
+    var onToggleDeveloped: ([URL]) -> Void
     /// 右クリックメニュー（対象のファイルを受け取って作る）
     var contextMenu: ([URL]) -> NSMenu?
 
@@ -39,12 +46,16 @@ struct PhotoGridView: NSViewRepresentable {
             [weak coordinator] collectionView, indexPath, url in
             let item = collectionView.makeItem(withIdentifier: PhotoGridItem.identifier, for: indexPath)
             if let cell = item as? PhotoGridItem, let coordinator, let photo = coordinator.itemsByURL[url] {
-                cell.configure(photo, pixelSize: coordinator.pixelSize, showName: coordinator.layout?.config?.showNames ?? true)
+                cell.configure(photo, pixelSize: coordinator.pixelSize,
+                               showName: coordinator.layout?.config?.showNames ?? true,
+                               tags: coordinator.parent?.tagsFor(url) ?? .empty)
             }
             return item
         }
         cv.onOpen = { [weak coordinator] urls in coordinator?.parent?.onOpen(urls) }
         cv.menuProvider = { [weak coordinator] urls in coordinator?.parent?.contextMenu(urls) }
+        cv.onRate = { [weak coordinator] urls, r in coordinator?.parent?.onRate(urls, r) }
+        cv.onToggleDeveloped = { [weak coordinator] urls in coordinator?.parent?.onToggleDeveloped(urls) }
         cv.urlsForIndexPaths = { [weak coordinator] paths in
             guard let ds = coordinator?.dataSource else { return [] }
             return paths.sorted().compactMap { ds.itemIdentifier(for: $0) }
@@ -88,6 +99,14 @@ struct PhotoGridView: NSViewRepresentable {
             }
         }
 
+        // レーティング等の変更：見えているセルのバッジだけ更新する
+        if c.lastTagsVersion != tagsVersion {
+            c.lastTagsVersion = tagsVersion
+            for case let cell as PhotoGridItem in cv.visibleItems() {
+                if let url = cell.representedURL { cell.updateBadges(tagsFor(url)) }
+            }
+        }
+
         // 選択状態の同期（ユーザー操作で変わった場合は一致しているので何もしない）
         let current = Set(cv.selectionIndexPaths.compactMap { ds.itemIdentifier(for: $0) })
         if current != selection {
@@ -106,6 +125,7 @@ struct PhotoGridView: NSViewRepresentable {
         var itemsByURL: [URL: PhotoItem] = [:]
         var currentIDs: [URL] = []
         var isApplyingSelection = false
+        var lastTagsVersion = -1
         private var lastPixelBucket = 0
 
         /// サムネイルとして要求するピクセルサイズ
@@ -122,7 +142,8 @@ struct PhotoGridView: NSViewRepresentable {
             let showNames = layout?.config?.showNames ?? true
             for case let cell as PhotoGridItem in cv.visibleItems() {
                 if let url = cell.representedURL, let photo = itemsByURL[url] {
-                    cell.configure(photo, pixelSize: pixelSize, showName: showNames)
+                    cell.configure(photo, pixelSize: pixelSize, showName: showNames,
+                                   tags: parent?.tagsFor(url) ?? .empty)
                 }
             }
         }
@@ -188,6 +209,8 @@ final class PhotoCollectionView: NSCollectionView {
     var onOpen: (([URL]) -> Void)?
     var urlsForIndexPaths: ((Set<IndexPath>) -> [URL])?
     var menuProvider: (([URL]) -> NSMenu?)?
+    var onRate: (([URL], Int) -> Void)?
+    var onToggleDeveloped: (([URL]) -> Void)?
 
     /// 右クリック：未選択のセルならそのセルだけを選択してからメニューを出す
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -202,23 +225,33 @@ final class PhotoCollectionView: NSCollectionView {
         return menuProvider?(urls)
     }
 
+    /// 直前にクリックしたセル（別のセルを素早く続けてクリックしたときにダブルクリック扱いしないため）
+    private var lastClickedPath: IndexPath?
+
     override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        let path = indexPathForItem(at: p)
+        let previous = lastClickedPath
+        lastClickedPath = path
         super.mouseDown(with: event)
-        if event.clickCount == 2 {
-            let p = convert(event.locationInWindow, from: nil)
-            if let path = indexPathForItem(at: p), let urls = urlsForIndexPaths?([path]) {
-                onOpen?(urls)
-            }
+        if event.clickCount == 2, let path, path == previous,
+           !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift),
+           let urls = urlsForIndexPaths?([path]) {
+            onOpen?(urls)
         }
     }
 
     override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 36, 76: // Return / Enter：選択中のファイルを開く
-            if let urls = urlsForIndexPaths?(selectionIndexPaths), !urls.isEmpty {
-                onOpen?(urls)
-            }
-        default:
+        let urls = urlsForIndexPaths?(selectionIndexPaths) ?? []
+        let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        let chars = event.charactersIgnoringModifiers ?? ""
+        if event.keyCode == 36 || event.keyCode == 76 { // Return / Enter：選択中のファイルを開く
+            if !urls.isEmpty { onOpen?(urls) }
+        } else if plain, let n = Int(chars), (0...5).contains(n) { // 0〜5：レーティング
+            if !urls.isEmpty { onRate?(urls, n) }
+        } else if plain, chars.lowercased() == "d" { // D：現像済みの切り替え
+            if !urls.isEmpty { onToggleDeveloped?(urls) }
+        } else {
             super.keyDown(with: event)
         }
     }

@@ -26,6 +26,20 @@ struct PhotoViewerApp: App {
                 Button("フォルダを開く…") { openFolderPanel() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
             }
+            CommandMenu("写真") {
+                let targets = browser.selectedURLsInDisplayOrder
+                ForEach(1...5, id: \.self) { n in
+                    Button(String(repeating: "★", count: n)) { browser.setRating(n, for: targets) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
+                }
+                Button("レーティングなし") { browser.setRating(0, for: targets) }
+                    .keyboardShortcut("0", modifiers: .command)
+                Button("リジェクト") { browser.setRating(-1, for: targets) }
+                    .keyboardShortcut(.delete, modifiers: .option)
+                Divider()
+                Button("現像済みを切り替え") { browser.toggleDeveloped(for: targets) }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
             CommandGroup(after: .sidebar) {
                 Button("再読み込み") { browser.reload() }
                     .keyboardShortcut("r", modifiers: .command)

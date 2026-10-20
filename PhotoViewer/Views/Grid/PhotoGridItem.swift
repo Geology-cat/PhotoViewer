@@ -8,6 +8,9 @@ final class PhotoGridItem: NSCollectionViewItem {
     private let thumbView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let selectionLayer = CALayer()
+    /// 左下：★、右上：現像済みマーク
+    private let ratingLabel = NSTextField(labelWithString: "")
+    private let developedBadge = NSImageView()
     private var loadTask: Task<Void, Never>?
     private var showName = true
 
@@ -28,6 +31,23 @@ final class PhotoGridItem: NSCollectionViewItem {
         nameLabel.textColor = .secondaryLabelColor
         v.addSubview(nameLabel)
 
+        ratingLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        ratingLabel.textColor = .white
+        ratingLabel.alignment = .center
+        ratingLabel.wantsLayer = true
+        ratingLabel.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        ratingLabel.layer?.cornerRadius = 4
+        ratingLabel.isHidden = true
+        v.addSubview(ratingLabel)
+
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .bold)
+            .applying(.init(paletteColors: [.white, .systemGreen]))
+        developedBadge.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "現像済み")?
+            .withSymbolConfiguration(config)
+        developedBadge.toolTip = "現像済み"
+        developedBadge.isHidden = true
+        v.addSubview(developedBadge)
+
         view = v
     }
 
@@ -40,6 +60,10 @@ final class PhotoGridItem: NSCollectionViewItem {
         nameLabel.frame = NSRect(x: 2, y: 2, width: b.width - 4, height: labelH - 4)
         thumbView.frame = NSRect(x: inset, y: labelH + inset, width: b.width - inset * 2,
                                  height: b.height - labelH - inset * 2)
+        let ratingSize = ratingLabel.intrinsicContentSize
+        ratingLabel.frame = NSRect(x: inset + 4, y: labelH + inset + 4,
+                                   width: ratingSize.width + 8, height: ratingSize.height + 2)
+        developedBadge.frame = NSRect(x: b.width - inset - 22, y: b.height - inset - 22, width: 18, height: 18)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         selectionLayer.frame = b
@@ -73,7 +97,26 @@ final class PhotoGridItem: NSCollectionViewItem {
         thumbView.image = nil
     }
 
-    func configure(_ photo: PhotoItem, pixelSize: Int, showName: Bool) {
+    /// ★と現像済みマークを更新する
+    func updateBadges(_ tags: PhotoTags) {
+        switch tags.rating {
+        case 1...5:
+            ratingLabel.stringValue = String(repeating: "★", count: tags.rating)
+            ratingLabel.textColor = .systemYellow
+            ratingLabel.isHidden = false
+        case -1:
+            ratingLabel.stringValue = "✕"
+            ratingLabel.textColor = .systemRed
+            ratingLabel.isHidden = false
+        default:
+            ratingLabel.isHidden = true
+        }
+        developedBadge.isHidden = !tags.developed
+        view.needsLayout = true
+    }
+
+    func configure(_ photo: PhotoItem, pixelSize: Int, showName: Bool, tags: PhotoTags) {
+        updateBadges(tags)
         let url = photo.url
         let sameURL = representedURL == url
         representedURL = url

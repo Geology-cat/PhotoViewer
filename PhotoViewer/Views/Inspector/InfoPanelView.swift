@@ -15,6 +15,7 @@ struct InfoPanelView: View {
                         .font(.headline)
                         .textSelection(.enabled)
                         .lineLimit(2)
+                    TagEditor(targets: targets(primary: item))
                     if let m = metadata {
                         shootingSection(m)
                         if let c = m.coordinate {
@@ -43,6 +44,11 @@ struct InfoPanelView: View {
             guard let url = item?.url else { return }
             metadata = await browser.metadata(for: url)
         }
+    }
+
+    /// 複数選択中は選択中すべて、そうでなければ表示中の 1 枚が対象
+    private func targets(primary: PhotoItem) -> [URL] {
+        browser.selection.count > 1 ? browser.selectedURLsInDisplayOrder : [primary.url]
     }
 
     private func shootingSection(_ m: PhotoMetadata) -> some View {
@@ -146,5 +152,68 @@ struct InfoRow: View {
             Spacer(minLength: 0)
         }
         .font(.callout)
+    }
+}
+
+/// レーティング（★）と現像済みチェックの編集
+private struct TagEditor: View {
+    @Environment(BrowserState.self) private var browser
+    let targets: [URL]
+
+    var body: some View {
+        let tags = targets.first.map { browser.tags(for: $0) } ?? .empty
+        let mixedRating = Set(targets.map { browser.tags(for: $0).rating }).count > 1
+        let allDeveloped = targets.allSatisfy { browser.tags(for: $0).developed }
+        let anyDeveloped = targets.contains { browser.tags(for: $0).developed }
+        let _ = browser.tagsVersion
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 2) {
+                ForEach(1...5, id: \.self) { n in
+                    Button {
+                        // 同じ★をもう一度押すと解除
+                        browser.setRating(!mixedRating && tags.rating == n ? 0 : n, for: targets)
+                    } label: {
+                        Image(systemName: !mixedRating && tags.rating >= n ? "star.fill" : "star")
+                            .foregroundStyle(!mixedRating && tags.rating >= n ? .yellow : .secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("★\(n)（キー \(n)）")
+                }
+                Button {
+                    browser.setRating(tags.rating == -1 ? 0 : -1, for: targets)
+                } label: {
+                    Image(systemName: "xmark.circle")
+                        .foregroundStyle(!mixedRating && tags.rating == -1 ? .red : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("リジェクト（⌥⌫）")
+                .padding(.leading, 6)
+                if mixedRating {
+                    Text("（混在）").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .imageScale(.large)
+
+            Toggle(isOn: Binding(
+                get: { allDeveloped },
+                set: { browser.setDeveloped($0, for: targets) }
+            )) {
+                Text("現像済み") + Text("（キー D）").font(.caption).foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .overlay(alignment: .leading) {
+                // 一部だけ現像済みのとき
+                if anyDeveloped && !allDeveloped {
+                    Text("−").font(.caption.bold()).offset(x: 3).allowsHitTesting(false)
+                }
+            }
+            if targets.count > 1 {
+                Text("\(targets.count) 件にまとめて設定します")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
