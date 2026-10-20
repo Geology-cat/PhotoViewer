@@ -4,6 +4,7 @@ import SwiftUI
 /// メインウィンドウ：サイドバー／グリッド／インスペクタ（プレビュー＋情報）
 struct ContentView: View {
     @Environment(BrowserState.self) private var browser
+    @Environment(AppSettings.self) private var settings
     @AppStorage("inspector.visible") private var showInspector = true
     @AppStorage(GridSettings.modeKey) private var gridMode: GridLayoutMode = .size
     @AppStorage(GridSettings.thumbnailSizeKey) private var thumbnailSize = GridSettings.defaultSize
@@ -48,7 +49,8 @@ struct ContentView: View {
                 layoutConfig: GridLayoutConfig(mode: gridMode, thumbnailSize: thumbnailSize,
                                                columns: columns, showNames: showNames),
                 onSelectionChange: { browser.updateSelection($0, lastAdded: $1) },
-                onOpen: { browser.openExternally($0) }
+                onOpen: { settings.open($0) },
+                contextMenu: { urls in GridContextMenu.make(for: urls, settings: settings) }
             )
             .overlay {
                 if browser.isScanning && browser.items.isEmpty {

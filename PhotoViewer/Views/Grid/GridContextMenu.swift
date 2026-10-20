@@ -1,0 +1,59 @@
+import AppKit
+
+/// クロージャで動作を指定できるメニュー項目
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, image: NSImage? = nil, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        self.target = self
+        self.image = image
+    }
+
+    required init(coder: NSCoder) { fatalError("未対応") }
+
+    @objc private func run() { handler() }
+}
+
+/// グリッドの右クリックメニュー
+@MainActor
+enum GridContextMenu {
+    static func make(for urls: [URL], settings: AppSettings) -> NSMenu {
+        let menu = NSMenu()
+        let title = urls.count == 1 ? "開く" : "\(urls.count) 件を開く"
+        menu.addItem(ClosureMenuItem(title) { settings.open(urls) })
+
+        // 「このアプリで開く」：選択中の拡張子すべてを開けるアプリを候補にする
+        let exts = Set(urls.map { $0.pathExtension.lowercased() })
+        var candidates: [URL]? = nil
+        for e in exts {
+            let apps = AppSettings.candidateApps(forExtension: e)
+            candidates = candidates.map { c in c.filter { apps.contains($0) } } ?? apps
+        }
+        let sub = NSMenu()
+        for app in candidates ?? [] {
+            let icon = NSWorkspace.shared.icon(forFile: app.path)
+            icon.size = NSSize(width: 16, height: 16)
+            sub.addItem(ClosureMenuItem(AppAssociation(appURL: app).name, image: icon) {
+                settings.open(urls, withApplicationAt: app)
+            })
+        }
+        if sub.items.isEmpty {
+            sub.addItem(NSMenuItem(title: "候補なし", action: nil, keyEquivalent: ""))
+        }
+        let openWith = NSMenuItem(title: "このアプリで開く", action: nil, keyEquivalent: "")
+        openWith.submenu = sub
+        menu.addItem(openWith)
+
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem("Finder で表示") {
+            NSWorkspace.shared.activateFileViewerSelecting(urls)
+        })
+        menu.addItem(ClosureMenuItem("パスをコピー") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
+        })
+        return menu
+    }
+}

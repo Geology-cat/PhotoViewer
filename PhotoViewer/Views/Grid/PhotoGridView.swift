@@ -16,6 +16,8 @@ struct PhotoGridView: NSViewRepresentable {
     var layoutConfig: GridLayoutConfig
     var onSelectionChange: (Set<URL>, URL?) -> Void
     var onOpen: ([URL]) -> Void
+    /// 右クリックメニュー（対象のファイルを受け取って作る）
+    var contextMenu: ([URL]) -> NSMenu?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -42,6 +44,7 @@ struct PhotoGridView: NSViewRepresentable {
             return item
         }
         cv.onOpen = { [weak coordinator] urls in coordinator?.parent?.onOpen(urls) }
+        cv.menuProvider = { [weak coordinator] urls in coordinator?.parent?.contextMenu(urls) }
         cv.urlsForIndexPaths = { [weak coordinator] paths in
             guard let ds = coordinator?.dataSource else { return [] }
             return paths.sorted().compactMap { ds.itemIdentifier(for: $0) }
@@ -184,6 +187,20 @@ final class GridLayout: NSCollectionViewFlowLayout {
 final class PhotoCollectionView: NSCollectionView {
     var onOpen: (([URL]) -> Void)?
     var urlsForIndexPaths: ((Set<IndexPath>) -> [URL])?
+    var menuProvider: (([URL]) -> NSMenu?)?
+
+    /// 右クリック：未選択のセルならそのセルだけを選択してからメニューを出す
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let path = indexPathForItem(at: p) else { return nil }
+        if !selectionIndexPaths.contains(path) {
+            deselectAll(nil)
+            selectItems(at: [path], scrollPosition: [])
+            delegate?.collectionView?(self, didSelectItemsAt: [path])
+        }
+        guard let urls = urlsForIndexPaths?(selectionIndexPaths), !urls.isEmpty else { return nil }
+        return menuProvider?(urls)
+    }
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)

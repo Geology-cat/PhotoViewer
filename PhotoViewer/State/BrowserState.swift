@@ -101,8 +101,8 @@ final class BrowserState {
         return m
     }
 
-    /// 既定のアプリで開く（Phase 5 で拡張子ごとの関連アプリに対応する）
-    func openExternally(_ urls: [URL]) {
-        for u in urls { NSWorkspace.shared.open(u) }
+    /// 選択中のファイル（グリッドの表示順）
+    var selectedURLsInDisplayOrder: [URL] {
+        displayedItems.lazy.map(\.url).filter { self.selection.contains($0) }
     }
 }
