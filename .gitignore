@@ -9,4 +9,4 @@ build/
 xcuserdata/
 
 # テストデータ（Scripts/generate_testdata.swift で生成）
-TestData/
+TestData
