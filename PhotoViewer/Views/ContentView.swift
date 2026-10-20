@@ -17,13 +17,21 @@ struct ContentView: View {
         @Bindable var browser = browser
         NavigationSplitView {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 180, ideal: 230, max: 400)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 230, max: 600)
         } detail: {
-            gridArea
-                .inspector(isPresented: $showInspector) {
+            // 右列（プレビュー＋情報）は分割ビューで並べる
+            // SwiftUI 標準の .inspector は、ウインドウに収まらないほど広げられる設定にすると
+            // レイアウト更新が繰り返されて AppKit の例外でクラッシュするため使わない
+            HSplitView {
+                gridArea
+                    // 中央のグリッドはサムネイル 1 列分まで狭くできる（右列を広げてプレビューを大きく見るため）
+                    .frame(minWidth: 120, maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
+                if showInspector {
                     InspectorView()
-                        .inspectorColumnWidth(min: 260, ideal: 340, max: 700)
+                        .frame(minWidth: 240, idealWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
                 }
+            }
         }
         .navigationTitle(browser.currentFolder?.lastPathComponent ?? "PhotoViewer")
         .navigationSubtitle(subtitle)
@@ -158,6 +166,13 @@ struct ContentView: View {
                 Label("ファイル名", systemImage: "textformat")
             }
             .help("ファイル名を表示")
+
+            Button {
+                showInspector.toggle()
+            } label: {
+                Label("プレビューと情報", systemImage: "sidebar.right")
+            }
+            .help("右列（プレビューと情報）の表示／非表示（⌃⌘I）")
         }
     }
 }

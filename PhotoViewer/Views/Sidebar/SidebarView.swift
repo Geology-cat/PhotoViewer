@@ -37,29 +37,165 @@ struct SidebarView: View {
 
 // MARK: - リスト表示（ツリー）
 
+/// Finder のリスト表示のように、フォルダをダブルクリック（または Return）するとその中に入り、
+/// そのフォルダから下の階層だけをツリーで表示する
 private struct FolderListView: View {
     @Environment(BrowserState.self) private var browser
     @Environment(FolderTree.self) private var tree
+    /// ツリーの起点にしているフォルダのパス（空 = 最上位の「よく使う項目」「場所」）
+    @AppStorage("sidebar.listRoot") private var rootPath = ""
+    @State private var rootNode: FolderNode?
+
+    private var rootURL: URL? {
+        rootPath.isEmpty ? nil : URL(fileURLWithPath: rootPath, isDirectory: true)
+    }
 
     var body: some View {
         let selection = Binding<URL?>(
             get: { browser.currentFolder },
             set: { if let u = $0 { browser.open(folder: u) } }
         )
-        List(selection: selection) {
-            Section("よく使う項目") {
-                ForEach(tree.favorites) { node in
-                    FolderTreeRow(node: node)
-                }
-                .onMove { tree.moveFavorites(from: $0, to: $1) }
+        VStack(spacing: 0) {
+            if let root = rootURL {
+                header(root)
+                Divider()
             }
-            Section("場所") {
-                ForEach(tree.volumes) { node in
-                    FolderTreeRow(node: node, systemImage: "externaldrive")
+            List(selection: selection) {
+                if let rootNode {
+                    if let children = rootNode.children {
+                        if children.isEmpty {
+                            Text("サブフォルダはありません")
+                                .foregroundStyle(.secondary)
+                                .selectionDisabled()
+                        }
+                        ForEach(children) { FolderTreeRow(node: $0) }
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                } else {
+                    Section("よく使う項目") {
+                        ForEach(tree.favorites) { node in
+                            FolderTreeRow(node: node)
+                        }
+                        .onMove { tree.moveFavorites(from: $0, to: $1) }
+                    }
+                    Section("場所") {
+                        ForEach(tree.volumes) { node in
+                            FolderTreeRow(node: node, systemImage: "externaldrive")
+                        }
+                    }
                 }
+            }
+            .listStyle(.sidebar)
+            // 起点を変えたら一覧を作り直す（前の一覧の選択表示が残像として残るのを防ぐ）
+            .id(rootPath)
+            .contextMenu(forSelectionType: URL.self) { urls in
+                if let url = urls.first {
+                    Button("このフォルダに入る") { enter(url) }
+                    Divider()
+                    if tree.isFavorite(url) {
+                        Button("よく使う項目から削除") { tree.removeFavorite(url) }
+                    } else {
+                        Button("よく使う項目に追加") { tree.addFavorite(url) }
+                    }
+                    Button("Finder で表示") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                }
+            } primaryAction: { urls in
+                // ダブルクリック・Return でそのフォルダの中に入る
+                if let url = urls.first { enter(url) }
             }
         }
-        .listStyle(.sidebar)
+        .task(id: rootPath) { loadRoot() }
+    }
+
+    /// 起点フォルダの見出し：上の階層へ・最上位へ・親フォルダのメニュー
+    private func header(_ root: URL) -> some View {
+        HStack(spacing: 4) {
+            Button {
+                goUp(from: root)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .help("上の階層へ（⌘↑）")
+            .keyboardShortcut(.upArrow, modifiers: .command)
+            .disabled(root.path == "/")
+
+            // フォルダ名は長くても省略表示にして、サイドバーの最小幅を変えない
+            // （名前の長さで最小幅が変わると、分割ビューのレイアウト更新が繰り返されてクラッシュする）
+            Text(FileManager.default.displayName(atPath: root.path))
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .help(root.path)
+
+            Menu {
+                // 親フォルダをたどって移動できる（Finder のタイトルの右クリックと同じ）
+                ForEach(ancestors(of: root), id: \.self) { url in
+                    Button {
+                        enter(url)
+                    } label: {
+                        Label(FileManager.default.displayName(atPath: url.path),
+                              systemImage: url.path == "/" ? "internaldrive" : "folder")
+                    }
+                }
+            } label: {
+                Image(systemName: "chevron.down.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 22)
+            .help("親フォルダへ移動")
+
+            Button {
+                rootPath = ""
+            } label: {
+                Image(systemName: "star.square.on.square")
+            }
+            .help("よく使う項目・場所の一覧に戻る")
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    private func enter(_ url: URL) {
+        rootPath = url.standardizedFileURL.path
+        browser.open(folder: url)
+    }
+
+    private func goUp(from root: URL) {
+        let parent = root.deletingLastPathComponent()
+        rootPath = parent.standardizedFileURL.path
+        browser.open(folder: parent)
+    }
+
+    /// 自分自身を除く、親フォルダの一覧（近い順）
+    private func ancestors(of url: URL) -> [URL] {
+        var result: [URL] = []
+        var u = url.deletingLastPathComponent()
+        while true {
+            result.append(u)
+            if u.path == "/" { break }
+            u = u.deletingLastPathComponent()
+        }
+        return result
+    }
+
+    private func loadRoot() {
+        guard let root = rootURL else {
+            rootNode = nil
+            return
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
+            // フォルダが消えた・ドライブが外されたときは最上位に戻る
+            rootPath = ""
+            return
+        }
+        let node = FolderNode(url: root)
+        node.loadChildren()
+        rootNode = node
     }
 }
 
@@ -87,7 +223,6 @@ private struct FolderTreeRow: View {
         Label(node.displayName, systemImage: systemImage)
             .lineLimit(1)
             .tag(node.url)
-            .folderContextMenu(node.url)
     }
 }
 

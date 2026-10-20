@@ -6,6 +6,7 @@ struct PhotoViewerApp: App {
     @State private var browser = BrowserState()
     @State private var tree = FolderTree()
     @State private var settings = AppSettings()
+    @AppStorage("inspector.visible") private var showInspector = true
 
     var body: some Scene {
         Window("PhotoViewer", id: "main") {
@@ -18,7 +19,6 @@ struct PhotoViewerApp: App {
         .defaultSize(width: 1400, height: 900)
         .commands {
             SidebarCommands()
-            InspectorCommands()
             CommandGroup(after: .newItem) {
                 Button("開く") { settings.open(browser.selectedURLsInDisplayOrder) }
                     .keyboardShortcut("o", modifiers: .command)
@@ -54,6 +54,8 @@ struct PhotoViewerApp: App {
                 .disabled(targets.isEmpty)
             }
             CommandGroup(after: .sidebar) {
+                Button(showInspector ? "プレビューと情報を隠す" : "プレビューと情報を表示") { showInspector.toggle() }
+                    .keyboardShortcut("i", modifiers: [.command, .control])
                 Button("再読み込み") { browser.reload() }
                     .keyboardShortcut("r", modifiers: .command)
             }

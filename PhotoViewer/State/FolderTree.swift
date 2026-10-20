@@ -26,13 +26,15 @@ final class FolderNode: Identifiable {
         self.hasChildren = hasChildren
     }
 
+    /// 子フォルダを読む。孫フォルダの有無は先に調べない（Finder と同じく開いたときに分かる）
+    /// 先に中を調べると、デスクトップや書類などのアクセス許可ダイアログが、開いてもいないのに出てしまうため
     func loadChildren() {
         let url = url
         Task {
-            let found: [(URL, Bool)] = await Task.detached(priority: .userInitiated) {
-                FolderScanner.subfolders(of: url).map { ($0, FolderScanner.hasSubfolders($0)) }
+            let found: [URL] = await Task.detached(priority: .userInitiated) {
+                FolderScanner.subfolders(of: url)
             }.value
-            self.children = found.map { FolderNode(url: $0.0, hasChildren: $0.1) }
+            self.children = found.map { FolderNode(url: $0) }
             self.hasChildren = !found.isEmpty
         }
     }

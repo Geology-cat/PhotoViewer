@@ -71,18 +71,4 @@ enum FolderScanner {
         }
         .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
-
-    /// サブフォルダを 1 つでも持つか（ツリーの開閉ボタン表示用。最初の 1 件で打ち切る）
-    static func hasSubfolders(_ folder: URL) -> Bool {
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
-        guard let e = FileManager.default.enumerator(
-            at: folder, includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants, .skipsPackageDescendants]) else { return false }
-        while let u = e.nextObject() as? URL {
-            if let v = try? u.resourceValues(forKeys: Set(keys)), v.isDirectory == true, v.isPackage != true {
-                return true
-            }
-        }
-        return false
-    }
 }
