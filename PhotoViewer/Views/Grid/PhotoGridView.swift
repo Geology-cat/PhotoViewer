@@ -60,6 +60,7 @@ struct PhotoGridView: NSViewRepresentable {
         cv.onRate = { [weak coordinator] urls, r in coordinator?.parent?.onRate(urls, r) }
         cv.onToggleDeveloped = { [weak coordinator] urls in coordinator?.parent?.onToggleDeveloped(urls) }
         cv.onTrash = { [weak coordinator] urls in coordinator?.parent?.onTrash(urls) }
+        cv.onClickSelectionChange = { [weak coordinator] added in coordinator?.selectionChangedByClick(added) }
         cv.urlsForIndexPaths = { [weak coordinator] paths in
             guard let ds = coordinator?.dataSource else { return [] }
             return paths.sorted().compactMap { ds.itemIdentifier(for: $0) }
@@ -163,7 +164,12 @@ struct PhotoGridView: NSViewRepresentable {
             }
         }
 
+        func selectionChangedByClick(_ added: Set<IndexPath>) {
+            notifySelection(lastAddedPaths: added)
+        }
+
         func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
+            (collectionView as? PhotoCollectionView)?.resetAnchor(to: indexPaths.max())
             notifySelection(lastAddedPaths: indexPaths)
         }
 
@@ -234,20 +240,93 @@ final class PhotoCollectionView: NSCollectionView {
         return menuProvider?(urls)
     }
 
+    /// クリックで選択を変えたときの通知（引数は新しく選択に加わったセル）
+    var onClickSelectionChange: ((Set<IndexPath>) -> Void)?
+
     /// 直前にクリックしたセル（別のセルを素早く続けてクリックしたときにダブルクリック扱いしないため）
     private var lastClickedPath: IndexPath?
+    /// Shift＋クリックの範囲選択の起点と、起点を決めたときの選択（⌘ で選んでいたものを残すため）
+    private var anchor: IndexPath?
+    private var anchorBase: Set<IndexPath> = []
 
+    /// キー操作などクリック以外で選択が変わったときは、Shift＋クリックの起点もそこに合わせる
+    func resetAnchor(to path: IndexPath?) {
+        anchor = path
+        anchorBase = selectionIndexPaths
+    }
+    /// 複数選択中の選択済みセルをクリックしたとき、ダブルクリックでなければ少し後で 1 つにする
+    private var pendingCollapse: DispatchWorkItem?
+
+    /// Finder と同じクリック操作
+    /// - クリック：その 1 枚だけを選択（複数選択中の選択済みをクリックしたときは、ダブルクリックに備えて少し待つ）
+    /// - ⌘＋クリック：その 1 枚を選択に加える／外す（飛び飛びに選べる）
+    /// - Shift＋クリック：起点からクリックしたセルまでの間をすべて選択
+    /// - ダブルクリック：選択中のセルをダブルクリックしたら、選択中のファイルをすべて開く
     override func mouseDown(with event: NSEvent) {
-        let p = convert(event.locationInWindow, from: nil)
-        let path = indexPathForItem(at: p)
+        window?.makeFirstResponder(self)
+        let point = convert(event.locationInWindow, from: nil)
+        guard let path = indexPathForItem(at: point) else {
+            // 何もない所：範囲をドラッグして選ぶ操作などは標準のまま
+            lastClickedPath = nil
+            pendingCollapse?.cancel()
+            super.mouseDown(with: event)
+            return
+        }
+        let flags = event.modifierFlags.intersection([.command, .shift])
         let previous = lastClickedPath
         lastClickedPath = path
-        super.mouseDown(with: event)
-        if event.clickCount == 2, let path, path == previous,
-           !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift),
-           let urls = urlsForIndexPaths?([path]) {
-            onOpen?(urls)
+
+        if event.clickCount >= 2 {
+            pendingCollapse?.cancel()
+            pendingCollapse = nil
+            guard flags.isEmpty, path == previous else { return }
+            let targets = selectionIndexPaths.contains(path) ? selectionIndexPaths : [path]
+            if let urls = urlsForIndexPaths?(targets), !urls.isEmpty { onOpen?(urls) }
+            return
         }
+        pendingCollapse?.cancel()
+        pendingCollapse = nil
+
+        if flags.contains(.shift) {
+            let start = anchor ?? selectionIndexPaths.min() ?? path
+            let lo = min(start.item, path.item), hi = max(start.item, path.item)
+            let range = Set((lo...hi).map { IndexPath(item: $0, section: path.section) })
+            if anchor == nil {
+                anchor = start
+                anchorBase = selectionIndexPaths
+            }
+            applyClickSelection(anchorBase.union(range), added: [path])
+            return
+        }
+        if flags.contains(.command) {
+            var sel = selectionIndexPaths
+            let adding = !sel.contains(path)
+            if adding { sel.insert(path) } else { sel.remove(path) }
+            applyClickSelection(sel, added: adding ? [path] : [])
+            anchor = path
+            anchorBase = sel
+            return
+        }
+        if selectionIndexPaths.contains(path) && selectionIndexPaths.count > 1 {
+            // 複数選択中の選択済みセル：ダブルクリックかもしれないので、すぐには 1 つにしない
+            anchor = path
+            anchorBase = [path]
+            let work = DispatchWorkItem { [weak self] in
+                self?.applyClickSelection([path], added: [path])
+            }
+            pendingCollapse = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
+            return
+        }
+        super.mouseDown(with: event)
+        anchor = path
+        anchorBase = selectionIndexPaths
+    }
+
+    private func applyClickSelection(_ selection: Set<IndexPath>, added: Set<IndexPath>) {
+        guard selection != selectionIndexPaths else { return }
+        selectionIndexPaths = selection
+        onClickSelectionChange?(added)
     }
 
     override func keyDown(with event: NSEvent) {
