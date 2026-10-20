@@ -19,7 +19,8 @@ final class ClosureMenuItem: NSMenuItem {
 /// グリッドの右クリックメニュー
 @MainActor
 enum GridContextMenu {
-    static func make(for urls: [URL], settings: AppSettings, onRename: @escaping () -> Void) -> NSMenu {
+    static func make(for urls: [URL], settings: AppSettings, onRename: @escaping () -> Void,
+                     onTrash: @escaping () -> Void) -> NSMenu {
         let menu = NSMenu()
         let title = urls.count == 1 ? "開く" : "\(urls.count) 件を開く"
         menu.addItem(ClosureMenuItem(title) { settings.open(urls) })
@@ -56,6 +57,8 @@ enum GridContextMenu {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
         })
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem("ゴミ箱に入れる", handler: onTrash))
         return menu
     }
 }

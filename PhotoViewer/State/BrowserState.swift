@@ -51,6 +51,11 @@ final class BrowserState {
     @ObservationIgnored private var bulkMetadataTask: Task<Void, Never>?
 
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    /// 一覧を読み込み済みのフォルダ（同じフォルダの読み直しかどうかの判定用）
+    @ObservationIgnored private var loadedFolder: URL?
+    /// 書き込み中のサイドカー（読み直しで古い値に戻さないため）
+    @ObservationIgnored private var pendingWrites: [URL: Int] = [:]
+    @ObservationIgnored private lazy var watcher = FolderWatcher { [weak self] in self?.reload() }
     @ObservationIgnored private var metadataTasks: [URL: Task<PhotoMetadata, Never>] = [:]
 
     private static let lastFolderKey = "lastFolderPath"
@@ -81,6 +86,7 @@ final class BrowserState {
         let folder = folder.standardizedFileURL
         guard folder != currentFolder else { return }
         currentFolder = folder
+        watcher.watch(folder)
         // フォルダを移ったら撮影情報のキャッシュは捨てる（メモリを増やし続けないため）
         bulkMetadataTask?.cancel()
         metadataProgress = nil
@@ -104,9 +110,12 @@ final class BrowserState {
             }.value
             result.items.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             guard !Task.isCancelled, folder == self.currentFolder else { return }
+            let isRefresh = self.loadedFolder == folder
+            self.loadedFolder = folder
             self.items = result.items
             self.sidecarIndex = result.sidecars
-            self.tagsBySidecar = [:]
+            // 別のフォルダを開いたときだけ消す（同じフォルダの読み直しでは★がちらつかないよう残す）
+            if !isRefresh { self.tagsBySidecar = [:] }
             self.recomputeDisplayed()
             PerfLog.scanFinished(count: result.items.count)
             let existing = Set(result.items.map(\.url))
@@ -176,6 +185,63 @@ final class BrowserState {
         guard !missing.isEmpty else { return }
         let loaded = await Self.readMetadata(missing)
         metadataCache.merge(loaded) { old, _ in old }
+    }
+
+    // MARK: - ゴミ箱
+
+    /// ゴミ箱へ移す。同名のファイルがすべてなくなるならサイドカーも移す。⌘Z で戻せる
+    func moveToTrash(_ urls: [URL], undoManager: UndoManager?) {
+        guard !urls.isEmpty else { return }
+        let removing = Set(urls)
+        var targets = urls
+        for u in urls {
+            let key = FolderScanner.sidecarKey(u)
+            let siblingsRemain = items.contains { FolderScanner.sidecarKey($0.url) == key && !removing.contains($0.url) }
+            if !siblingsRemain, let sc = sidecarIndex[key], !targets.contains(sc) { targets.append(sc) }
+        }
+        Task {
+            var restored: [(original: URL, trashed: URL)] = []
+            var failed: [String] = []
+            for u in targets {
+                do {
+                    var result: NSURL?
+                    try FileManager.default.trashItem(at: u, resultingItemURL: &result)
+                    if let t = result as URL? { restored.append((u, t)) }
+                } catch {
+                    failed.append("\(u.lastPathComponent)：\(error.localizedDescription)")
+                }
+            }
+            if !failed.isEmpty {
+                self.alertMessage = "ゴミ箱に入れられませんでした\n" + failed.prefix(3).joined(separator: "\n")
+            }
+            if !restored.isEmpty {
+                let pairs = restored
+                undoManager?.registerUndo(withTarget: self) { target in
+                    MainActor.assumeIsolated { target.restoreFromTrash(pairs) }
+                }
+                undoManager?.setActionName("ゴミ箱に入れる")
+            }
+            self.selection.subtract(removing)
+            if let p = self.primarySelection, removing.contains(p) { self.primarySelection = nil }
+            self.reload()
+        }
+    }
+
+    private func restoreFromTrash(_ pairs: [(original: URL, trashed: URL)]) {
+        var failed: [String] = []
+        for p in pairs {
+            do {
+                try FileManager.default.moveItem(at: p.trashed, to: p.original)
+            } catch {
+                failed.append("\(p.original.lastPathComponent)：\(error.localizedDescription)")
+            }
+        }
+        if !failed.isEmpty {
+            alertMessage = "ゴミ箱から戻せませんでした\n" + failed.prefix(3).joined(separator: "\n")
+        }
+        pendingSelection = (Set(pairs.map(\.original).filter { SupportedFormats.isSupported($0) }),
+                            pairs.first.map(\.original))
+        reload()
     }
 
     // MARK: - バッチリネーム
@@ -255,7 +321,6 @@ final class BrowserState {
 
     /// サイドカーをまとめて読む（小さいファイルなので一括で読む）
     private func loadSidecars(_ urls: [URL], folder: URL) async {
-        guard !urls.isEmpty else { return }
         let loaded: [URL: PhotoTags] = await Task.detached(priority: .utility) {
             var d: [URL: PhotoTags] = [:]
             for u in urls {
@@ -265,8 +330,13 @@ final class BrowserState {
             return d
         }.value
         guard !Task.isCancelled, folder == currentFolder else { return }
-        tagsBySidecar.merge(loaded) { _, new in new }
-        tagsDidChange()
+        // 読み直した結果で置き換える（消えたサイドカーの分は消える）。書き込み中のものは今の値を残す
+        var next = loaded
+        for (u, n) in pendingWrites where n > 0 { next[u] = tagsBySidecar[u] }
+        if next != tagsBySidecar {
+            tagsBySidecar = next
+            tagsDidChange()
+        }
     }
 
     /// 表示用の一覧を作り直す
@@ -373,8 +443,13 @@ final class BrowserState {
         tagsDidChange()
 
         let targets = Array(sidecars.keys)
+        for t in targets { pendingWrites[t, default: 0] += 1 }
         Task {
             let failures = await SidecarWriter.shared.update(targets, change: change)
+            for t in targets {
+                self.pendingWrites[t, default: 1] -= 1
+                if self.pendingWrites[t] == 0 { self.pendingWrites[t] = nil }
+            }
             for (sc, _) in failures {
                 if let old = previous[sc] { self.tagsBySidecar[sc] = old }
             }

@@ -1,4 +1,5 @@
 import AppKit
+import Quartz
 import SwiftUI
 
 /// グリッドのレイアウト設定（SwiftUI 側から渡す値）
@@ -23,6 +24,8 @@ struct PhotoGridView: NSViewRepresentable {
     var onRate: ([URL], Int) -> Void
     /// D キーで現像済みを切り替え
     var onToggleDeveloped: ([URL]) -> Void
+    /// ⌘⌫ でゴミ箱へ（グリッドにフォーカスがあるときだけ。検索欄での ⌘⌫ と区別するため）
+    var onTrash: ([URL]) -> Void
     /// 右クリックメニュー（対象のファイルを受け取って作る）
     var contextMenu: ([URL]) -> NSMenu?
 
@@ -56,6 +59,7 @@ struct PhotoGridView: NSViewRepresentable {
         cv.menuProvider = { [weak coordinator] urls in coordinator?.parent?.contextMenu(urls) }
         cv.onRate = { [weak coordinator] urls, r in coordinator?.parent?.onRate(urls, r) }
         cv.onToggleDeveloped = { [weak coordinator] urls in coordinator?.parent?.onToggleDeveloped(urls) }
+        cv.onTrash = { [weak coordinator] urls in coordinator?.parent?.onTrash(urls) }
         cv.urlsForIndexPaths = { [weak coordinator] paths in
             guard let ds = coordinator?.dataSource else { return [] }
             return paths.sorted().compactMap { ds.itemIdentifier(for: $0) }
@@ -153,6 +157,10 @@ struct PhotoGridView: NSViewRepresentable {
             let urls = Set(cv.selectionIndexPaths.compactMap { ds.itemIdentifier(for: $0) })
             let last = lastAddedPaths.max().flatMap { ds.itemIdentifier(for: $0) }
             parent?.onSelectionChange(urls, last)
+            // Quick Look を表示中なら選択に合わせて切り替える
+            if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared().isVisible {
+                QLPreviewPanel.shared().reloadData()
+            }
         }
 
         func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
@@ -211,6 +219,7 @@ final class PhotoCollectionView: NSCollectionView {
     var menuProvider: (([URL]) -> NSMenu?)?
     var onRate: (([URL], Int) -> Void)?
     var onToggleDeveloped: (([URL]) -> Void)?
+    var onTrash: (([URL]) -> Void)?
 
     /// 右クリック：未選択のセルならそのセルだけを選択してからメニューを出す
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -251,8 +260,63 @@ final class PhotoCollectionView: NSCollectionView {
             if !urls.isEmpty { onRate?(urls, n) }
         } else if plain, chars.lowercased() == "d" { // D：現像済みの切り替え
             if !urls.isEmpty { onToggleDeveloped?(urls) }
+        } else if event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+                  event.keyCode == 51 { // ⌘⌫：ゴミ箱へ
+            if !urls.isEmpty { onTrash?(urls) }
+        } else if plain, chars == " " { // Space：Quick Look
+            toggleQuickLook()
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    // MARK: - Quick Look
+
+    private var quickLookURLs: [URL] = []
+
+    func toggleQuickLook() {
+        let panel = QLPreviewPanel.shared()!
+        if panel.isVisible {
+            panel.orderOut(nil)
+        } else {
+            panel.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+
+    // Quick Look のパネルはメインスレッドから呼ばれる
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated {
+            panel.dataSource = self
+            panel.delegate = self
+        }
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated {
+            panel.dataSource = nil
+            panel.delegate = nil
+        }
+    }
+}
+
+extension PhotoCollectionView: @preconcurrency QLPreviewPanelDataSource, @preconcurrency QLPreviewPanelDelegate {
+    private var selectedURLs: [URL] { urlsForIndexPaths?(selectionIndexPaths) ?? [] }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        selectedURLs.count
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
+        let urls = selectedURLs
+        return urls.indices.contains(index) ? urls[index] as NSURL : nil
+    }
+
+    /// Quick Look 表示中の矢印キーなどはグリッドに渡して選択を動かす
+    func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
+        guard let event, event.type == .keyDown else { return false }
+        keyDown(with: event)
+        return true
     }
 }

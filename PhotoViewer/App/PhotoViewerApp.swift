@@ -43,6 +43,15 @@ struct PhotoViewerApp: App {
                 Button("名前を一括変更…") { browser.renameTargets = targets }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(targets.isEmpty)
+                Divider()
+                Button("Quick Look（Space）") {
+                    (NSApp.keyWindow?.firstResponder as? PhotoCollectionView)?.toggleQuickLook()
+                }
+                .disabled(targets.isEmpty)
+                Button("ゴミ箱に入れる（⌘⌫）") {
+                    browser.moveToTrash(targets, undoManager: NSApp.keyWindow?.undoManager)
+                }
+                .disabled(targets.isEmpty)
             }
             CommandGroup(after: .sidebar) {
                 Button("再読み込み") { browser.reload() }

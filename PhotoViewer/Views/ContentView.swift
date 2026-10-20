@@ -77,9 +77,11 @@ struct ContentView: View {
                 tagsVersion: browser.tagsVersion,
                 onRate: { browser.setRating($1, for: $0) },
                 onToggleDeveloped: { browser.toggleDeveloped(for: $0) },
+                onTrash: { browser.moveToTrash($0, undoManager: undoManager) },
                 contextMenu: { urls in
                     GridContextMenu.make(for: urls, settings: settings,
-                                         onRename: { browser.renameTargets = urls })
+                                         onRename: { browser.renameTargets = urls },
+                                         onTrash: { browser.moveToTrash(urls, undoManager: undoManager) })
                 }
             )
             .overlay {
