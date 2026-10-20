@@ -13,8 +13,10 @@ settings:
     SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
     SWIFT_STRICT_CONCURRENCY: complete
     MACOSX_DEPLOYMENT_TARGET: "15.0"
+    # Xcode に登録した Apple ID（Personal Team）で署名する。署名が毎回同じになるので、アクセス許可が再ビルドのたびにリセットされない
     CODE_SIGN_STYLE: Automatic
-    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: BT5MH5A8GY
     ENABLE_HARDENED_RUNTIME: NO
     DEAD_CODE_STRIPPING: YES
 

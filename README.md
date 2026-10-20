@@ -8,7 +8,7 @@ Adobe Bridge の代わりに使う、軽量な macOS 用の写真閲覧アプリ
 - フォルダツリー（リスト／アイコン表示）とサムネイルグリッド（サイズ指定／列数指定）
 - プレビューと撮影情報（撮影日・ISO・F 値・シャッタースピード・焦点距離・カメラ・レンズ）
 - GPS：緯度経度のコピー、Google マップ・地理院地図で開く
-- レーティング（★1〜5・リジェクト）と「現像済み」チェック。XMP サイドカーに保存する（標準の `xmp:Rating` で書くので、RAW なら Bridge・Lightroom でも読める想定。実機では未確認）
+- レーティング（★1〜5・リジェクト）と「現像済み」チェック。XMP サイドカーに保存する（RAW は Bridge でも同じ★が見えることを確認済み）
 - 検索・絞り込み：ファイル名・カメラ・レンズのフリーワード、拡張子、レーティング、現像済み、撮影日・カメラ・レンズ・ISO・F 値・SS・焦点距離の範囲、位置情報の有無
 - 並べ替え：ファイル名・撮影日・更新日・レーティング・サイズ
 - 拡張子ごとに、ダブルクリックで開くアプリを環境設定で指定
@@ -35,9 +35,9 @@ Adobe Bridge の代わりに使う、軽量な macOS 用の写真閲覧アプリ
 ## ビルド
 ```bash
 brew install xcodegen
-xcodegen generate
-xcodebuild -project PhotoViewer.xcodeproj -scheme PhotoViewer -configuration Release -derivedDataPath build build
-open build/Build/Products/Release/PhotoViewer.app
+./Scripts/build_dist.sh
+open dist/PhotoViewer.app
 ```
+署名には Xcode に登録した Apple ID（Personal Team）を使う（`project.yml` の `DEVELOPMENT_TEAM`）。
 
 詳しくは `開発計画書.md`、`開発履歴.md`、`CLAUDE.md` を参照。

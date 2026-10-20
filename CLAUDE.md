@@ -5,9 +5,15 @@ Adobe Bridge の代わりに使う、軽量な macOS 用写真閲覧アプリ（
 
 ## 基本ルール
 - やり取り・コメント・ドキュメント・コミットメッセージはすべて日本語。
+- **コードを更新したら、必ず `./Scripts/build_dist.sh` を実行して `dist/PhotoViewer.app` を作り直す**（ユーザーはこの app を使う。`dist/` は git 管理外）。
 - **軽量であることが最優先**。重い処理（画像デコード、EXIF 読み込み、ファイル操作）は必ずメインスレッドの外で行う。
 - 外部ライブラリは使わない（OS 標準フレームワークのみ）。
 - 作業の区切りごとに `開発履歴.md` に追記し、コミットして GitHub に push する。
+
+## 配布用 app（dist）
+```bash
+./Scripts/build_dist.sh   # Release ビルド → dist/PhotoViewer.app（起動中なら終了してから置き換える）
+```
 
 ## ビルド・テスト
 Xcode プロジェクトは XcodeGen で `project.yml` から生成する（`*.xcodeproj` は git 管理外）。
@@ -22,7 +28,7 @@ open build/Build/Products/Debug/PhotoViewer.app
 
 テスト用の写真は `swift Scripts/generate_testdata.swift ~/Library/Caches/PhotoViewerTestData` で生成する。
 `TestData` はそこへのシンボリックリンク（git 管理外）。
-- デスクトップ配下はアクセス許可（TCC）の対象で、ad-hoc 署名だとビルドのたびに許可ダイアログが出て読み込みが止まる。そのため、テストデータはデスクトップの外に置く。
+- デスクトップ配下はアクセス許可（TCC）の対象。以前の ad-hoc 署名ではビルドのたびに許可ダイアログが出て読み込みが止まったため、テストデータはデスクトップの外に置いている。
 - 外付け HDD（/Volumes/LaCie_d2）の実写真は**読み取り専用**で性能確認に使う。レーティングやリネームなどの書き込みテストは必ず TestData で行う。
 - 性能計測：`PV_PERF=1 build/Build/Products/Debug/PhotoViewer.app/Contents/MacOS/PhotoViewer` で起動すると、最初のサムネイルが出るまでの時間を標準エラー出力に出す。
 
@@ -30,6 +36,8 @@ open build/Build/Products/Debug/PhotoViewer.app
 | 項目 | 決定 |
 |------|------|
 | 最低対応 OS | macOS 15 |
+| 署名 | Apple Development（Personal Team `BT5MH5A8GY`、自動署名）。xcodebuild には `-allowProvisioningUpdates` を付ける |
+| アプリアイコン | Codex の画像生成で作った `docs/icon_source.png` を `swift Scripts/generate_icon.swift docs/icon_source.png PhotoViewer/Resources/Assets.xcassets/AppIcon.appiconset` で角丸・各サイズに加工 |
 | Swift | Swift 6 / Strict Concurrency complete / 既定のアクター分離は `nonisolated` |
 | サンドボックス | 使わない（`ENABLE_APP_SANDBOX: NO`） |
 | サムネイルグリッド | `NSCollectionView` を `NSViewRepresentable` でラップ（複数選択・キー操作・性能のため） |
