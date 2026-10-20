@@ -15,6 +15,15 @@ Adobe Bridge の代わりに使う、軽量な macOS 用写真閲覧アプリ（
 ./Scripts/build_dist.sh   # Release ビルド → dist/PhotoViewer.app（起動中なら終了してから置き換える）
 ```
 
+## リリース（DMG）
+```bash
+./Scripts/build_dmg.sh   # dist/PhotoViewer-<バージョン>.dmg を作る（中身：app・Applications へのリンク・かんたんインストーラ.scpt）
+```
+- バージョンは `project.yml` の `MARKETING_VERSION`。
+- インストーラの元は `Scripts/installer/かんたんインストーラ.applescript`（osacompile で .scpt にして同梱）。
+- GitHub リリース：`gh release create v<バージョン> dist/PhotoViewer-<バージョン>.dmg`。
+- 署名は Apple Development（Developer ID ではなく公証もしていない）なので、配布先では隔離属性の削除が必要。インストーラがこれを行う。
+
 ## ビルド・テスト
 Xcode プロジェクトは XcodeGen で `project.yml` から生成する（`*.xcodeproj` は git 管理外）。
 **ファイルを追加・削除したら必ず `xcodegen generate` を再実行する**。

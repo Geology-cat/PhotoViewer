@@ -30,7 +30,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.geologycat.PhotoViewer
         PRODUCT_NAME: PhotoViewer
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: PhotoViewer
