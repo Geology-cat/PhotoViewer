@@ -39,6 +39,10 @@ struct PhotoViewerApp: App {
                 Divider()
                 Button("現像済みを切り替え") { browser.toggleDeveloped(for: targets) }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
+                Divider()
+                Button("名前を一括変更…") { browser.renameTargets = targets }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(targets.isEmpty)
             }
             CommandGroup(after: .sidebar) {
                 Button("再読み込み") { browser.reload() }

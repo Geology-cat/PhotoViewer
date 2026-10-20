@@ -19,7 +19,7 @@ final class ClosureMenuItem: NSMenuItem {
 /// グリッドの右クリックメニュー
 @MainActor
 enum GridContextMenu {
-    static func make(for urls: [URL], settings: AppSettings) -> NSMenu {
+    static func make(for urls: [URL], settings: AppSettings, onRename: @escaping () -> Void) -> NSMenu {
         let menu = NSMenu()
         let title = urls.count == 1 ? "開く" : "\(urls.count) 件を開く"
         menu.addItem(ClosureMenuItem(title) { settings.open(urls) })
@@ -46,6 +46,8 @@ enum GridContextMenu {
         openWith.submenu = sub
         menu.addItem(openWith)
 
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem("名前を一括変更…", handler: onRename))
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem("Finder で表示") {
             NSWorkspace.shared.activateFileViewerSelecting(urls)

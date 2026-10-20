@@ -11,6 +11,7 @@ struct ContentView: View {
     @AppStorage(GridSettings.columnsKey) private var columns = GridSettings.defaultColumns
     @AppStorage(GridSettings.showNamesKey) private var showNames = true
     @State private var showFilter = false
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         @Bindable var browser = browser
@@ -29,6 +30,14 @@ struct ContentView: View {
         .toolbar { toolbarContent }
         .searchable(text: $browser.filter.text, placement: .toolbar, prompt: "ファイル名・カメラ・レンズ")
         .onAppear { browser.restoreLastFolder() }
+        .sheet(isPresented: Binding(
+            get: { browser.renameTargets != nil },
+            set: { if !$0 { browser.renameTargets = nil } }
+        )) {
+            if let targets = browser.renameTargets {
+                RenameSheet(targets: targets, undoManager: undoManager)
+            }
+        }
         .alert("エラー", isPresented: Binding(
             get: { browser.alertMessage != nil },
             set: { if !$0 { browser.alertMessage = nil } }
@@ -68,7 +77,10 @@ struct ContentView: View {
                 tagsVersion: browser.tagsVersion,
                 onRate: { browser.setRating($1, for: $0) },
                 onToggleDeveloped: { browser.toggleDeveloped(for: $0) },
-                contextMenu: { urls in GridContextMenu.make(for: urls, settings: settings) }
+                contextMenu: { urls in
+                    GridContextMenu.make(for: urls, settings: settings,
+                                         onRename: { browser.renameTargets = urls })
+                }
             )
             .overlay {
                 if browser.isScanning && browser.items.isEmpty {

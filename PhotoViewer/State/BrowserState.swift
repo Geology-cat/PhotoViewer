@@ -31,6 +31,9 @@ final class BrowserState {
     /// 書き込みエラーなど、ユーザーに知らせるメッセージ
     var alertMessage: String?
 
+    /// バッチリネームの対象（nil でなければシートを表示する）
+    var renameTargets: [URL]?
+
     /// 検索・絞り込み・並べ替えの条件
     var filter = PhotoFilter() {
         didSet {
@@ -107,6 +110,11 @@ final class BrowserState {
             self.recomputeDisplayed()
             PerfLog.scanFinished(count: result.items.count)
             let existing = Set(result.items.map(\.url))
+            if let pending = self.pendingSelection {
+                self.pendingSelection = nil
+                self.selection = pending.0
+                self.primarySelection = pending.1
+            }
             self.selection = self.selection.intersection(existing)
             if let p = self.primarySelection, !existing.contains(p) { self.primarySelection = nil }
             self.isScanning = false
@@ -161,6 +169,75 @@ final class BrowserState {
             return result
         }
     }
+
+    /// 指定したファイルの撮影情報を読み込んでおく（リネームで撮影日を使うため）
+    func ensureMetadata(_ urls: [URL]) async {
+        let missing = urls.filter { metadataCache[$0] == nil }
+        guard !missing.isEmpty else { return }
+        let loaded = await Self.readMetadata(missing)
+        metadataCache.merge(loaded) { old, _ in old }
+    }
+
+    // MARK: - バッチリネーム
+
+    func makeRenamePlan(targets: [URL], options: RenameOptions) -> RenamePlan {
+        let dirs = Set(targets.map { $0.deletingLastPathComponent() })
+        var existing: [URL: Set<String>] = [:]
+        for d in dirs {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: d.path)) ?? []
+            existing[d] = Set(names.map { $0.lowercased() })
+        }
+        let modDates = Dictionary(items.map { ($0.url, $0.modificationDate) }, uniquingKeysWith: { a, _ in a })
+        return RenameService.plan(targets: targets, folderItems: items.map(\.url), sidecars: sidecarIndex,
+                                  metadata: metadataCache, modificationDates: modDates,
+                                  existingNames: existing, options: options)
+    }
+
+    /// リネームを実行し、取り消し（⌘Z）を登録する
+    func performRename(_ plan: RenamePlan, undoManager: UndoManager?) async -> Bool {
+        do {
+            let journal = try await Task.detached(priority: .userInitiated) {
+                try RenameService.execute(plan)
+            }.value
+            afterRename(journal)
+            undoManager?.registerUndo(withTarget: self) { target in
+                MainActor.assumeIsolated { target.undoRename(journal) }
+            }
+            undoManager?.setActionName("名前の一括変更")
+            return true
+        } catch {
+            alertMessage = error.localizedDescription
+            reload()
+            return false
+        }
+    }
+
+    private func undoRename(_ journal: RenameJournal) {
+        Task {
+            do {
+                let back = try await Task.detached(priority: .userInitiated) {
+                    try RenameService.undo(journal)
+                }.value
+                self.afterRename(back)
+            } catch {
+                self.alertMessage = "取り消しに失敗しました。\n" + error.localizedDescription
+                self.reload()
+            }
+        }
+    }
+
+    /// リネーム後：一覧を読み直し、変更後のファイルを選択した状態にする
+    private func afterRename(_ journal: RenameJournal) {
+        let map = Dictionary(journal.steps.filter { !$0.copied }.map { ($0.from, $0.to) },
+                             uniquingKeysWith: { a, _ in a })
+        let newSelection = Set(selection.map { map[$0] ?? $0 })
+        let newPrimary = primarySelection.map { map[$0] ?? $0 }
+        for s in journal.steps { ThumbnailLoader.shared.remove(s.from) }
+        pendingSelection = (newSelection, newPrimary)
+        reload()
+    }
+
+    @ObservationIgnored private var pendingSelection: (Set<URL>, URL?)?
 
     /// 読み込み済みの撮影情報にあるカメラ名・レンズ名（絞り込みの候補）
     var knownCameras: [String] {
