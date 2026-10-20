@@ -53,6 +53,8 @@ final class BrowserState {
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     /// 一覧を読み込み済みのフォルダ（同じフォルダの読み直しかどうかの判定用）
     @ObservationIgnored private var loadedFolder: URL?
+    /// 読み込み済みサイドカーの更新日（同じフォルダの読み直しでは、変わったものだけ読む）
+    @ObservationIgnored private var sidecarDates: [URL: Date] = [:]
     /// 書き込み中のサイドカー（読み直しで古い値に戻さないため）
     @ObservationIgnored private var pendingWrites: [URL: Int] = [:]
     @ObservationIgnored private lazy var watcher = FolderWatcher { [weak self] in self?.reload() }
@@ -112,10 +114,14 @@ final class BrowserState {
             guard !Task.isCancelled, folder == self.currentFolder else { return }
             let isRefresh = self.loadedFolder == folder
             self.loadedFolder = folder
-            self.items = result.items
+            // 中身が同じなら代入しない（不要な再描画を避ける）
+            if self.items != result.items { self.items = result.items }
             self.sidecarIndex = result.sidecars
             // 別のフォルダを開いたときだけ消す（同じフォルダの読み直しでは★がちらつかないよう残す）
-            if !isRefresh { self.tagsBySidecar = [:] }
+            if !isRefresh {
+                self.tagsBySidecar = [:]
+                self.sidecarDates = [:]
+            }
             self.recomputeDisplayed()
             PerfLog.scanFinished(count: result.items.count)
             let existing = Set(result.items.map(\.url))
@@ -128,7 +134,7 @@ final class BrowserState {
             if let p = self.primarySelection, !existing.contains(p) { self.primarySelection = nil }
             self.isScanning = false
             if self.filter.needsMetadata { self.loadAllMetadata() }
-            await self.loadSidecars(Array(result.sidecars.values), folder: folder)
+            await self.loadSidecars(result.sidecarDates, folder: folder)
         }
     }
 
@@ -320,7 +326,16 @@ final class BrowserState {
     }
 
     /// サイドカーをまとめて読む（小さいファイルなので一括で読む）
-    private func loadSidecars(_ urls: [URL], folder: URL) async {
+    /// サイドカーを読む。前回から更新日が変わったもの・新しいものだけを読み、消えたものは取り除く
+    private func loadSidecars(_ dates: [URL: Date], folder: URL) async {
+        let changed = dates.filter { sidecarDates[$0.key] != $0.value }.map(\.key)
+        let removed = Set(sidecarDates.keys).subtracting(dates.keys)
+        sidecarDates = dates
+        // 書き込み中のものは更新日を覚えず、次の読み直しで必ず読む
+        for u in pendingWrites.keys { sidecarDates[u] = nil }
+        PerfLog.sidecarsReloaded(changed: changed.count, removed: removed.count, total: dates.count)
+        guard !changed.isEmpty || !removed.isEmpty else { return }
+        let urls = changed
         let loaded: [URL: PhotoTags] = await Task.detached(priority: .utility) {
             var d: [URL: PhotoTags] = [:]
             for u in urls {
@@ -330,9 +345,10 @@ final class BrowserState {
             return d
         }.value
         guard !Task.isCancelled, folder == currentFolder else { return }
-        // 読み直した結果で置き換える（消えたサイドカーの分は消える）。書き込み中のものは今の値を残す
-        var next = loaded
-        for (u, n) in pendingWrites where n > 0 { next[u] = tagsBySidecar[u] }
+        // 変わったものを反映し、消えたサイドカーの分は消す。書き込み中のものは今の値を残す
+        var next = tagsBySidecar
+        for u in removed where pendingWrites[u] == nil { next[u] = nil }
+        for (u, t) in loaded where pendingWrites[u] == nil { next[u] = t }
         if next != tagsBySidecar {
             tagsBySidecar = next
             tagsDidChange()
@@ -445,7 +461,8 @@ final class BrowserState {
         let targets = Array(sidecars.keys)
         for t in targets { pendingWrites[t, default: 0] += 1 }
         Task {
-            let failures = await SidecarWriter.shared.update(targets, change: change)
+            // サイドカーがまだ無いファイルは、ファイル内の★（カメラや Lightroom が書いたもの）を初期値にする
+            let failures = await SidecarWriter.shared.update(targets, images: sidecars, change: change)
             for t in targets {
                 self.pendingWrites[t, default: 1] -= 1
                 if self.pendingWrites[t] == 0 { self.pendingWrites[t] = nil }

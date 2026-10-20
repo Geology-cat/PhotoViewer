@@ -77,11 +77,17 @@ struct PhotoFilter: Equatable, Sendable {
     var sortKey: SortKey = .name
     var ascending = true
 
-    /// 撮影情報（EXIF）がないと判定できない条件があるか
-    var needsMetadata: Bool {
+    /// 撮影情報（EXIF）による絞り込み条件があるか
+    var usesExifConditions: Bool {
         dateFrom != nil || dateTo != nil || !cameras.isEmpty || !lenses.isEmpty
             || iso.isActive || fNumber.isActive || exposure.isActive || focalLength.isActive
-            || gps != .all || sortKey == .captureDate
+            || gps != .all
+    }
+
+    /// 撮影情報の一括読み込みが必要か
+    /// レーティングの条件・並べ替えも含む（サイドカーの無い JPEG などはファイル内の★を EXIF と一緒に読むため）
+    var needsMetadata: Bool {
+        usesExifConditions || sortKey == .captureDate || rating != .all || sortKey == .rating
     }
 
     /// 並べ替え以外の条件が入っているか
@@ -111,7 +117,7 @@ struct PhotoFilter: Equatable, Sendable {
     func apply(to items: [PhotoItem], metadata: [URL: PhotoMetadata],
                tags: (URL) -> PhotoTags) -> [PhotoItem] {
         let words = text.split(whereSeparator: \.isWhitespace).map(String.init)
-        let needsMeta = needsMetadataForFiltering
+        let needsMeta = usesExifConditions
         let calendar = Calendar.current
         let endOfDateTo = dateTo.flatMap { calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: $0)) }
         let startOfDateFrom = dateFrom.map { calendar.startOfDay(for: $0) }
@@ -151,12 +157,6 @@ struct PhotoFilter: Equatable, Sendable {
             return true
         }
         return sorted(filtered, metadata: metadata, tags: tags)
-    }
-
-    private var needsMetadataForFiltering: Bool {
-        var f = self
-        f.sortKey = .name
-        return f.needsMetadata
     }
 
     private func sorted(_ items: [PhotoItem], metadata: [URL: PhotoMetadata],

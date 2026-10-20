@@ -149,6 +149,18 @@ let basicSpecs: [Spec] = [
 for (i, s) in basicSpecs.enumerated() {
     write(s, to: basic, index: i + 1)
 }
+// ファイル内の XMP に★3 を持つ JPEG（カメラや Lightroom が書いた★の再現）
+do {
+    let url = basic.appendingPathComponent("EMBED_RATING3.JPG")
+    let image = makeImage(width: 1200, height: 800, label: "★3 内蔵", hue: 0.1)
+    let meta = CGImageMetadataCreateMutable()
+    _ = CGImageMetadataRegisterNamespaceForPrefix(meta, "http://ns.adobe.com/xap/1.0/" as CFString, "xmp" as CFString, nil)
+    _ = CGImageMetadataSetValueWithPath(meta, nil, "xmp:Rating" as CFString, "3" as CFString)
+    if let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) {
+        CGImageDestinationAddImageAndMetadata(dest, image, meta, nil)
+        _ = CGImageDestinationFinalize(dest)
+    }
+}
 for i in 1...5 {
     write(Spec(name: String(format: "SUB_%04d.JPG", i), date: "2023:05:0\(i) 09:00:00", make: "SONY",
                model: "ILCE-7RM5", lens: "FE 24-70mm F2.8 GM II"), to: sub, index: i)

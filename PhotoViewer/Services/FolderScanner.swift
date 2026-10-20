@@ -10,6 +10,8 @@ enum FolderScanner {
         var items: [PhotoItem]
         /// 拡張子を除いたパス（小文字）→ 実在するサイドカーの URL
         var sidecars: [String: URL]
+        /// サイドカーの更新日（変わったものだけ読み直すため）
+        var sidecarDates: [URL: Date]
     }
 
     static func sidecarKey(_ url: URL) -> String {
@@ -19,10 +21,15 @@ enum FolderScanner {
     /// 写真とサイドカー（.xmp）を列挙する
     static func scan(_ folder: URL, recursive: Bool = false) -> ScanResult {
         var sidecars: [String: URL] = [:]
+        var dates: [URL: Date] = [:]
         let items = scanPhotos(in: folder, recursive: recursive) { u in
-            if u.pathExtension.lowercased() == "xmp" { sidecars[sidecarKey(u)] = u }
+            if u.pathExtension.lowercased() == "xmp" {
+                sidecars[sidecarKey(u)] = u
+                dates[u] = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                    ?? .distantPast
+            }
         }
-        return ScanResult(items: items, sidecars: sidecars)
+        return ScanResult(items: items, sidecars: sidecars, sidecarDates: dates)
     }
 
     /// フォルダ直下（recursive なら配下すべて）の対応ファイルを列挙する

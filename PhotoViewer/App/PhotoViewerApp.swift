@@ -13,7 +13,7 @@ struct PhotoViewerApp: App {
                 .environment(browser)
                 .environment(tree)
                 .environment(settings)
-                .frame(minWidth: 900, minHeight: 560)
+                .frame(minWidth: 900, idealWidth: 1400, minHeight: 560, idealHeight: 900)
         }
         .defaultSize(width: 1400, height: 900)
         .commands {

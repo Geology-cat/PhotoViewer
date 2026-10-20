@@ -26,6 +26,10 @@ enum PerfLog {
         log("最初のサムネイル表示 \(label): \(ms(t.duration(to: .now)))")
     }
 
+    static func sidecarsReloaded(changed: Int, removed: Int, total: Int) {
+        log("サイドカー読み直し: 変更 \(changed) 件・削除 \(removed) 件（全 \(total) 件）")
+    }
+
     static func metadataLoaded(count: Int, since start: ContinuousClock.Instant) {
         log("撮影情報の一括読み込み: \(count) 件 \(ms(start.duration(to: .now)))")
     }

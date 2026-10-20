@@ -108,3 +108,19 @@ struct MetadataTests {
         #expect(m.captureDate != nil)
     }
 }
+
+extension MetadataTests {
+    @Test func F値や焦点距離が0なら不明として扱う() {
+        let props: [CFString: Any] = [
+            kCGImagePropertyExifDictionary: [
+                kCGImagePropertyExifFNumber: 0.0,
+                kCGImagePropertyExifFocalLength: 0.0,
+                kCGImagePropertyExifExposureTime: 80.0,
+            ],
+        ]
+        let m = MetadataReader.parse(properties: props)
+        #expect(m.fNumber == nil)
+        #expect(m.focalLength == nil)
+        #expect(m.exposureTime == 80)
+    }
+}

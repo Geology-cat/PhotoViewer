@@ -26,11 +26,18 @@ actor SidecarWriter {
     static let shared = SidecarWriter()
 
     /// 各サイドカーに change を適用する。失敗したものの (URL, 理由) を返す
-    func update(_ urls: [URL], change: @Sendable (inout PhotoTags) -> Void) -> [(URL, String)] {
+    /// - Parameter images: サイドカー → 対応する画像。サイドカーがまだ無いときは、画像ファイル内の★を初期値にする
+    func update(_ urls: [URL], images: [URL: URL] = [:],
+                change: @Sendable (inout PhotoTags) -> Void) -> [(URL, String)] {
         var failed: [(URL, String)] = []
         for u in urls {
             do {
-                try XMPSidecar.update(at: u, change: change)
+                var base = PhotoTags()
+                if !FileManager.default.fileExists(atPath: u.path), let image = images[u],
+                   let r = MetadataReader.read(url: image).embeddedRating {
+                    base.rating = r
+                }
+                try XMPSidecar.update(at: u, base: base, change: change)
             } catch {
                 failed.append((u, error.localizedDescription))
             }
@@ -78,10 +85,12 @@ enum XMPSidecar {
     }
 
     /// 既存のサイドカーを読み、change で変更して書き戻す。変更後の値を返す
+    /// - Parameter base: サイドカーがまだ無いときの初期値。カメラや Lightroom がファイル内に書いた★を引き継ぐために使う
     @discardableResult
-    static func update(at url: URL, now: Date = Date(), change: (inout PhotoTags) -> Void) throws -> PhotoTags {
+    static func update(at url: URL, base: PhotoTags = PhotoTags(), now: Date = Date(),
+                       change: (inout PhotoTags) -> Void) throws -> PhotoTags {
         let existing = try? Data(contentsOf: url)
-        var tags = try existing.map(parse) ?? PhotoTags()
+        var tags = try existing.map(parse) ?? base
         change(&tags)
         let data = try updated(existing, with: tags, now: now)
         try data.write(to: url, options: .atomic)

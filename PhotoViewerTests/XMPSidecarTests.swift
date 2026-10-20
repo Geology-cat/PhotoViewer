@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import Testing
 @testable import PhotoViewer
 
@@ -119,5 +120,67 @@ struct XMPSidecarTests {
         #expect(try XMPSidecar.read(from: url) == nil)
         try XMPSidecar.write(PhotoTags(rating: 4, developed: true), to: url)
         #expect(try XMPSidecar.read(from: url) == PhotoTags(rating: 4, developed: true))
+    }
+}
+
+/// ファイル内の XMP に★があり、サイドカーがまだ無い JPEG の扱い
+struct EmbeddedRatingTests {
+    @Test func サイドカー作成時にファイル内の星を引き継ぐ() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // ★3 をファイル内の XMP に持つ JPEG を作る
+        let jpg = dir.appendingPathComponent("IMG_9.JPG")
+        let ctx = CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let image = try #require(ctx.makeImage())
+        let meta = CGImageMetadataCreateMutable()
+        #expect(CGImageMetadataRegisterNamespaceForPrefix(meta, XMPSidecar.xmpNS as CFString, "xmp" as CFString, nil))
+        #expect(CGImageMetadataSetValueWithPath(meta, nil, "xmp:Rating" as CFString, "3" as CFString))
+        let dest = try #require(CGImageDestinationCreateWithURL(jpg as CFURL, "public.jpeg" as CFString, 1, nil))
+        CGImageDestinationAddImageAndMetadata(dest, image, meta, nil)
+        #expect(CGImageDestinationFinalize(dest))
+
+        let embedded = try #require(MetadataReader.read(url: jpg).embeddedRating)
+        #expect(embedded == 3)
+
+        // 現像済みだけを付けても★3 が残る
+        let sidecar = dir.appendingPathComponent("IMG_9.xmp")
+        let result = try XMPSidecar.update(at: sidecar, base: PhotoTags(rating: embedded)) { $0.developed = true }
+        #expect(result == PhotoTags(rating: 3, developed: true))
+        #expect(try XMPSidecar.read(from: sidecar) == PhotoTags(rating: 3, developed: true))
+    }
+
+    @Test func レーティング条件では撮影情報を読み込む() {
+        var f = PhotoFilter()
+        #expect(!f.needsMetadata)
+        f.rating = .atLeast(3)
+        #expect(f.needsMetadata)
+        #expect(!f.usesExifConditions)
+    }
+}
+
+extension EmbeddedRatingTests {
+    @Test func 書き込み処理が画像からファイル内の星を読む() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let jpg = dir.appendingPathComponent("IMG_8.JPG")
+        let ctx = CGContext(data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let meta = CGImageMetadataCreateMutable()
+        _ = CGImageMetadataRegisterNamespaceForPrefix(meta, XMPSidecar.xmpNS as CFString, "xmp" as CFString, nil)
+        _ = CGImageMetadataSetValueWithPath(meta, nil, "xmp:Rating" as CFString, "4" as CFString)
+        let dest = try #require(CGImageDestinationCreateWithURL(jpg as CFURL, "public.jpeg" as CFString, 1, nil))
+        CGImageDestinationAddImageAndMetadata(dest, try #require(ctx.makeImage()), meta, nil)
+        #expect(CGImageDestinationFinalize(dest))
+
+        let sidecar = dir.appendingPathComponent("IMG_8.xmp")
+        let failed = await SidecarWriter.shared.update([sidecar], images: [sidecar: jpg]) { $0.developed = true }
+        #expect(failed.isEmpty)
+        #expect(try XMPSidecar.read(from: sidecar) == PhotoTags(rating: 4, developed: true))
     }
 }

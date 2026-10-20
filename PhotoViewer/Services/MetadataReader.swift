@@ -31,9 +31,10 @@ enum MetadataReader {
         if let isos = exif[kCGImagePropertyExifISOSpeedRatings] as? [NSNumber], let first = isos.first {
             m.iso = first.intValue
         }
-        m.fNumber = (exif[kCGImagePropertyExifFNumber] as? NSNumber)?.doubleValue
-        m.exposureTime = (exif[kCGImagePropertyExifExposureTime] as? NSNumber)?.doubleValue
-        m.focalLength = (exif[kCGImagePropertyExifFocalLength] as? NSNumber)?.doubleValue
+        // 電子接点のないレンズや望遠鏡では 0 が入るので「不明」として扱う
+        m.fNumber = positive(exif[kCGImagePropertyExifFNumber])
+        m.exposureTime = positive(exif[kCGImagePropertyExifExposureTime])
+        m.focalLength = positive(exif[kCGImagePropertyExifFocalLength])
         m.cameraMake = trimmed(tiff[kCGImagePropertyTIFFMake] as? String)
         m.cameraModel = trimmed(tiff[kCGImagePropertyTIFFModel] as? String)
         m.lensModel = trimmed(exif[kCGImagePropertyExifLensModel] as? String)
@@ -91,6 +92,11 @@ enum MetadataReader {
         }
         guard let d = Double(value as String), d.isFinite else { return nil }
         return Int(d)
+    }
+
+    private static func positive(_ v: Any?) -> Double? {
+        guard let d = (v as? NSNumber)?.doubleValue, d > 0, d.isFinite else { return nil }
+        return d
     }
 
     private static func trimmed(_ s: String?) -> String? {
