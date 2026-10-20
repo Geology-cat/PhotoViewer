@@ -1,48 +1,103 @@
 import AppKit
+import DiskArbitration
 import Foundation
 import Observation
 
-/// フォルダツリーの 1 ノード。子フォルダは展開されたときに初めて読み込む
-@MainActor
-@Observable
-final class FolderNode: Identifiable {
-    let url: URL
-    let displayName: String
-    /// nil = 未読み込み
-    private(set) var children: [FolderNode]?
-    /// サブフォルダを持つか（未確認の間は true とみなして開閉ボタンを出す）
-    private(set) var hasChildren: Bool
-    var isExpanded = false {
-        didSet {
-            if isExpanded && children == nil { loadChildren() }
+/// ボリュームの種類
+enum VolumeKind: Int, Comparable, Sendable {
+    case `internal`, external, diskImage, network
+
+    static func < (a: VolumeKind, b: VolumeKind) -> Bool { a.rawValue < b.rawValue }
+
+    var sectionTitle: String {
+        switch self {
+        case .internal: "内蔵ディスク"
+        case .external: "外付けドライブ"
+        case .diskImage: "ディスクイメージ"
+        case .network: "ネットワーク"
         }
     }
 
-    nonisolated var id: URL { url }
-
-    init(url: URL, displayName: String? = nil, hasChildren: Bool = true) {
-        self.url = url
-        self.displayName = displayName ?? FileManager.default.displayName(atPath: url.path)
-        self.hasChildren = hasChildren
-    }
-
-    /// 子フォルダを読む。孫フォルダの有無は先に調べない（Finder と同じく開いたときに分かる）
-    /// 先に中を調べると、デスクトップや書類などのアクセス許可ダイアログが、開いてもいないのに出てしまうため
-    func loadChildren() {
-        let url = url
-        Task {
-            let found: [URL] = await Task.detached(priority: .userInitiated) {
-                FolderScanner.subfolders(of: url)
-            }.value
-            self.children = found.map { FolderNode(url: $0) }
-            self.hasChildren = !found.isEmpty
+    var symbolName: String {
+        switch self {
+        case .internal: "internaldrive"
+        case .external: "externaldrive.fill"
+        case .diskImage: "opticaldiscdrive"
+        case .network: "network"
         }
     }
 
-    /// 子フォルダを読み直す（フォルダ追加・削除の反映用）
-    func refresh() {
-        children = nil
-        if isExpanded { loadChildren() }
+    /// 外付けはオレンジで目立たせる
+    var tint: NSColor {
+        switch self {
+        case .internal: .secondaryLabelColor
+        case .external: .systemOrange
+        case .diskImage: .systemGray
+        case .network: .systemTeal
+        }
+    }
+
+    /// 取り出しボタンを出すか
+    var isEjectable: Bool { self != .internal }
+}
+
+/// マウント中のボリューム
+struct VolumeInfo: Hashable, Sendable {
+    var url: URL
+    var name: String
+    var kind: VolumeKind
+    var availableBytes: Int64?
+    var totalBytes: Int64?
+
+    /// 「空き 3.1 TB / 10 TB」
+    var capacityText: String? {
+        guard let a = availableBytes, let t = totalBytes, t > 0 else { return nil }
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        return "空き \(f.string(fromByteCount: a)) / \(f.string(fromByteCount: t))"
+    }
+
+    // MARK: 種類の判定
+
+    /// ボリュームの種類を判定する
+    /// DiskArbitration のデバイス情報（diskutil と同じ情報源）を優先し、取れなければ URL の情報で推定する
+    static func classify(_ url: URL) -> VolumeKind {
+        let keys: Set<URLResourceKey> = [.volumeIsLocalKey, .volumeIsInternalKey, .volumeIsRootFileSystemKey]
+        let v = try? url.resourceValues(forKeys: keys)
+        if v?.volumeIsRootFileSystem == true { return .internal }
+        if v?.volumeIsLocal == false { return .network }
+        if let session = DASessionCreate(kCFAllocatorDefault),
+           let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url as CFURL),
+           let desc = DADiskCopyDescription(disk) as? [CFString: Any] {
+            let proto = desc[kDADiskDescriptionDeviceProtocolKey] as? String
+            if proto == "Disk Image" || desc[kDADiskDescriptionDeviceModelKey] as? String == "Disk Image" {
+                return .diskImage
+            }
+            if let internalFlag = desc[kDADiskDescriptionDeviceInternalKey] as? Bool {
+                return internalFlag ? .internal : .external
+            }
+        }
+        // 推定：内蔵の判定が取れないボリュームは、ディスクイメージであることが多い
+        switch v?.volumeIsInternal {
+        case true?: return .internal
+        case false?: return .external
+        case nil: return .diskImage
+        }
+    }
+
+    static func load(_ url: URL, name: String? = nil) -> VolumeInfo {
+        let keys: Set<URLResourceKey> = [.volumeNameKey, .volumeAvailableCapacityForImportantUsageKey,
+                                         .volumeAvailableCapacityKey, .volumeTotalCapacityKey]
+        let v = try? url.resourceValues(forKeys: keys)
+        let available = v?.volumeAvailableCapacityForImportantUsage ?? v?.volumeAvailableCapacity.map(Int64.init)
+        return VolumeInfo(url: url, name: name ?? v?.volumeName ?? url.lastPathComponent, kind: classify(url),
+                          availableBytes: available, totalBytes: v?.volumeTotalCapacity.map(Int64.init))
+    }
+
+    /// 指定したフォルダを含むボリューム
+    static func containing(_ url: URL) -> VolumeInfo? {
+        guard let vol = (try? url.resourceValues(forKeys: [.volumeURLKey]))?.volume else { return nil }
+        return load(vol)
     }
 }
 
@@ -50,8 +105,8 @@ final class FolderNode: Identifiable {
 @MainActor
 @Observable
 final class FolderTree {
-    private(set) var favorites: [FolderNode] = []
-    private(set) var volumes: [FolderNode] = []
+    private(set) var favorites: [URL] = []
+    private(set) var volumes: [VolumeInfo] = []
 
     private static let favoritesKey = "sidebar.favorites"
 
@@ -59,6 +114,10 @@ final class FolderTree {
         loadFavorites()
         reloadVolumes()
         observeVolumeChanges()
+    }
+
+    static func displayName(_ url: URL) -> String {
+        FileManager.default.displayName(atPath: url.path)
     }
 
     private func loadFavorites() {
@@ -75,30 +134,25 @@ final class FolderTree {
         }
         favorites = paths
             .filter { FileManager.default.fileExists(atPath: $0) }
-            .map { FolderNode(url: URL(fileURLWithPath: $0, isDirectory: true)) }
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 
     private func saveFavorites() {
-        UserDefaults.standard.set(favorites.map(\.url.path), forKey: Self.favoritesKey)
+        UserDefaults.standard.set(favorites.map(\.path), forKey: Self.favoritesKey)
     }
 
     func isFavorite(_ url: URL) -> Bool {
-        favorites.contains { $0.url.standardizedFileURL == url.standardizedFileURL }
+        favorites.contains { $0.standardizedFileURL == url.standardizedFileURL }
     }
 
     func addFavorite(_ url: URL) {
         guard !isFavorite(url) else { return }
-        favorites.append(FolderNode(url: url.standardizedFileURL))
+        favorites.append(url.standardizedFileURL)
         saveFavorites()
     }
 
     func removeFavorite(_ url: URL) {
-        favorites.removeAll { $0.url.standardizedFileURL == url.standardizedFileURL }
-        saveFavorites()
-    }
-
-    func moveFavorites(from source: IndexSet, to destination: Int) {
-        favorites.move(fromOffsets: source, toOffset: destination)
+        favorites.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
         saveFavorites()
     }
 
@@ -109,13 +163,30 @@ final class FolderTree {
         volumes = urls.compactMap { u in
             let v = try? u.resourceValues(forKeys: Set(keys))
             guard v?.volumeIsBrowsable != false else { return nil }
-            return FolderNode(url: u, displayName: v?.volumeName ?? u.lastPathComponent)
+            return VolumeInfo.load(u, name: v?.volumeName)
         }
+        .sorted { ($0.kind, $0.name) < ($1.kind, $1.name) }
+    }
+
+    /// 取り出す（時間がかかることがあるのでバックグラウンドで行う）。失敗したら理由を返す
+    func eject(_ volume: VolumeInfo) async -> String? {
+        let url = volume.url
+        let error: String? = await Task.detached(priority: .userInitiated) {
+            do {
+                try NSWorkspace.shared.unmountAndEjectDevice(at: url)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }.value
+        reloadVolumes()
+        return error
     }
 
     private func observeVolumeChanges() {
         let nc = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification,
+                     NSWorkspace.didRenameVolumeNotification] {
             nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.reloadVolumes() }
             }

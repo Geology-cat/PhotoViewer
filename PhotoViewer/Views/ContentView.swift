@@ -23,7 +23,8 @@ struct ContentView: View {
             // SwiftUI 標準の .inspector は、ウインドウに収まらないほど広げられる設定にすると
             // レイアウト更新が繰り返されて AppKit の例外でクラッシュするため使わない
             HSplitView {
-                gridArea
+                // ZStack で包んで、フォルダの有無で中身が切り替わっても分割の位置が変わらないようにする
+                ZStack { gridArea }
                     // 中央のグリッドはサムネイル 1 列分まで狭くできる（右列を広げてプレビューを大きく見るため）
                     .frame(minWidth: 120, maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)

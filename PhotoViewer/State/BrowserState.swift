@@ -100,6 +100,25 @@ final class BrowserState {
         reload()
     }
 
+    /// 表示中のフォルダを閉じる（ドライブが外されたときなど）
+    func closeFolder() {
+        scanTask?.cancel()
+        bulkMetadataTask?.cancel()
+        watcher.stop()
+        currentFolder = nil
+        loadedFolder = nil
+        items = []
+        displayedItems = []
+        selection = []
+        primarySelection = nil
+        metadataCache = [:]
+        tagsBySidecar = [:]
+        sidecarDates = [:]
+        sidecarIndex = [:]
+        isScanning = false
+        metadataProgress = nil
+    }
+
     /// 現在のフォルダを読み直す
     func reload() {
         guard let folder = currentFolder else { return }

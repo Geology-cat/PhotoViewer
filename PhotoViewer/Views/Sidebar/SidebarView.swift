@@ -13,8 +13,8 @@ enum SidebarStyle: String, CaseIterable, Identifiable {
 /// 左列：ディレクトリ選択画面（リスト表示／アイコン表示）
 struct SidebarView: View {
     @Environment(BrowserState.self) private var browser
-    @Environment(FolderTree.self) private var tree
     @AppStorage("sidebar.style") private var style: SidebarStyle = .list
+    @AppStorage("sidebar.listRoot") private var listRoot = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +32,14 @@ struct SidebarView: View {
             case .icon: FolderIconView()
             }
         }
+        // ドライブが外されたら、そのドライブ上のフォルダを表示し続けない
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)) { note in
+            guard let vol = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL else { return }
+            let prefix = vol.standardizedFileURL.path
+            func isOn(_ path: String) -> Bool { path == prefix || path.hasPrefix(prefix + "/") }
+            if !listRoot.isEmpty && isOn(listRoot) { listRoot = "" }
+            if let cur = browser.currentFolder, isOn(cur.standardizedFileURL.path) { browser.closeFolder() }
+        }
     }
 }
 
@@ -42,121 +50,133 @@ struct SidebarView: View {
 private struct FolderListView: View {
     @Environment(BrowserState.self) private var browser
     @Environment(FolderTree.self) private var tree
-    /// ツリーの起点にしているフォルダのパス（空 = 最上位の「よく使う項目」「場所」）
+    /// ツリーの起点にしているフォルダのパス（空 = 最上位の「よく使う項目」・ボリューム）
     @AppStorage("sidebar.listRoot") private var rootPath = ""
-    @State private var rootNode: FolderNode?
+    @State private var rootVolume: VolumeInfo?
+    @State private var ejectError: String?
 
     private var rootURL: URL? {
         rootPath.isEmpty ? nil : URL(fileURLWithPath: rootPath, isDirectory: true)
     }
 
     var body: some View {
-        let selection = Binding<URL?>(
-            get: { browser.currentFolder },
-            set: { if let u = $0 { browser.open(folder: u) } }
-        )
         VStack(spacing: 0) {
             if let root = rootURL {
                 header(root)
                 Divider()
             }
-            List(selection: selection) {
-                if let rootNode {
-                    if let children = rootNode.children {
-                        if children.isEmpty {
-                            Text("サブフォルダはありません")
-                                .foregroundStyle(.secondary)
-                                .selectionDisabled()
-                        }
-                        ForEach(children) { FolderTreeRow(node: $0) }
-                    } else {
-                        ProgressView().controlSize(.small)
-                    }
-                } else {
-                    Section("よく使う項目") {
-                        ForEach(tree.favorites) { node in
-                            FolderTreeRow(node: node)
-                        }
-                        .onMove { tree.moveFavorites(from: $0, to: $1) }
-                    }
-                    Section("場所") {
-                        ForEach(tree.volumes) { node in
-                            FolderTreeRow(node: node, systemImage: "externaldrive")
-                        }
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-            // 起点を変えたら一覧を作り直す（前の一覧の選択表示が残像として残るのを防ぐ）
-            .id(rootPath)
-            .contextMenu(forSelectionType: URL.self) { urls in
-                if let url = urls.first {
-                    Button("このフォルダに入る") { enter(url) }
-                    Divider()
-                    if tree.isFavorite(url) {
-                        Button("よく使う項目から削除") { tree.removeFavorite(url) }
-                    } else {
-                        Button("よく使う項目に追加") { tree.addFavorite(url) }
-                    }
-                    Button("Finder で表示") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                }
-            } primaryAction: { urls in
-                // ダブルクリック・Return でそのフォルダの中に入る
-                if let url = urls.first { enter(url) }
-            }
+            FolderOutlineView(
+                root: rootURL,
+                favorites: tree.favorites,
+                volumes: tree.volumes,
+                currentFolder: browser.currentFolder,
+                onSelect: { browser.open(folder: $0) },
+                onEnter: { enter($0) },
+                menuFor: { menu(for: $0) },
+                onEject: { eject($0) }
+            )
         }
-        .task(id: rootPath) { loadRoot() }
+        .task(id: rootPath) { checkRoot() }
+        .alert("取り出せませんでした", isPresented: Binding(
+            get: { ejectError != nil }, set: { if !$0 { ejectError = nil } }
+        )) {
+            Button("OK") { ejectError = nil }
+        } message: {
+            Text(ejectError ?? "")
+        }
     }
 
-    /// 起点フォルダの見出し：上の階層へ・最上位へ・親フォルダのメニュー
+    /// 起点フォルダの見出し：どのドライブか・上の階層へ・親フォルダのメニュー・一覧へ戻る
     private func header(_ root: URL) -> some View {
-        HStack(spacing: 4) {
-            Button {
-                goUp(from: root)
-            } label: {
-                Image(systemName: "chevron.up")
-            }
-            .help("上の階層へ（⌘↑）")
-            .keyboardShortcut(.upArrow, modifiers: .command)
-            .disabled(root.path == "/")
-
-            // フォルダ名は長くても省略表示にして、サイドバーの最小幅を変えない
-            // （名前の長さで最小幅が変わると、分割ビューのレイアウト更新が繰り返されてクラッシュする）
-            Text(FileManager.default.displayName(atPath: root.path))
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                .help(root.path)
-
-            Menu {
-                // 親フォルダをたどって移動できる（Finder のタイトルの右クリックと同じ）
-                ForEach(ancestors(of: root), id: \.self) { url in
-                    Button {
-                        enter(url)
-                    } label: {
-                        Label(FileManager.default.displayName(atPath: url.path),
-                              systemImage: url.path == "/" ? "internaldrive" : "folder")
-                    }
+        VStack(alignment: .leading, spacing: 4) {
+            if let v = rootVolume {
+                // どのドライブの中にいるかを色付きで示す（外付けはオレンジ）
+                HStack(spacing: 4) {
+                    Image(systemName: v.kind.symbolName)
+                    Text(v.name).lineLimit(1).truncationMode(.middle)
+                    Text(v.kind.sectionTitle).foregroundStyle(.secondary)
                 }
-            } label: {
-                Image(systemName: "chevron.down.circle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color(nsColor: v.kind.tint))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color(nsColor: v.kind.tint).opacity(0.15), in: Capsule())
+                .help(v.capacityText ?? v.kind.sectionTitle)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 22)
-            .help("親フォルダへ移動")
+            HStack(spacing: 4) {
+                Button {
+                    goUp(from: root)
+                } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .help("上の階層へ（⌘↑）")
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .disabled(root.path == "/")
 
-            Button {
-                rootPath = ""
-            } label: {
-                Image(systemName: "star.square.on.square")
+                // フォルダ名は長くても省略表示にして、サイドバーの最小幅を変えない
+                // （名前の長さで最小幅が変わると、分割ビューのレイアウト更新が繰り返されてクラッシュする）
+                Text(FolderTree.displayName(root))
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    .help(root.path)
+
+                Menu {
+                    // 親フォルダをたどって移動できる（Finder のタイトルの右クリックと同じ）
+                    ForEach(ancestors(of: root), id: \.self) { url in
+                        Button {
+                            enter(url)
+                        } label: {
+                            Label(FolderTree.displayName(url),
+                                  systemImage: url.path == "/" ? "internaldrive" : "folder")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 22)
+                .help("親フォルダへ移動")
+
+                Button {
+                    rootPath = ""
+                } label: {
+                    Image(systemName: "star.square.on.square")
+                }
+                .help("よく使う項目・ドライブの一覧に戻る")
             }
-            .help("よく使う項目・場所の一覧に戻る")
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+    }
+
+    private func menu(for item: FolderItem) -> NSMenu? {
+        guard let url = item.url else { return nil }
+        let menu = NSMenu()
+        menu.addItem(ClosureMenuItem("このフォルダに入る") { enter(url) })
+        menu.addItem(.separator())
+        if tree.isFavorite(url) {
+            menu.addItem(ClosureMenuItem("よく使う項目から削除") { tree.removeFavorite(url) })
+        } else {
+            menu.addItem(ClosureMenuItem("よく使う項目に追加") { tree.addFavorite(url) })
+        }
+        menu.addItem(ClosureMenuItem("Finder で表示") { NSWorkspace.shared.activateFileViewerSelecting([url]) })
+        if let v = item.volume, v.kind.isEjectable {
+            menu.addItem(.separator())
+            menu.addItem(ClosureMenuItem("「\(v.name)」を取り出す") { eject(v) })
+        }
+        return menu
+    }
+
+    private func eject(_ v: VolumeInfo) {
+        Task {
+            if let error = await tree.eject(v) {
+                ejectError = "「\(v.name)」：\(error)\n使用中のファイルがあれば閉じてから、もう一度試してください。"
+            }
+        }
     }
 
     private func enter(_ url: URL) {
@@ -182,9 +202,9 @@ private struct FolderListView: View {
         return result
     }
 
-    private func loadRoot() {
+    private func checkRoot() {
         guard let root = rootURL else {
-            rootNode = nil
+            rootVolume = nil
             return
         }
         var isDir: ObjCBool = false
@@ -193,36 +213,7 @@ private struct FolderListView: View {
             rootPath = ""
             return
         }
-        let node = FolderNode(url: root)
-        node.loadChildren()
-        rootNode = node
-    }
-}
-
-private struct FolderTreeRow: View {
-    @Bindable var node: FolderNode
-    var systemImage = "folder"
-
-    var body: some View {
-        if node.hasChildren {
-            DisclosureGroup(isExpanded: $node.isExpanded) {
-                if let children = node.children {
-                    ForEach(children) { FolderTreeRow(node: $0) }
-                } else {
-                    ProgressView().controlSize(.small)
-                }
-            } label: {
-                label
-            }
-        } else {
-            label
-        }
-    }
-
-    private var label: some View {
-        Label(node.displayName, systemImage: systemImage)
-            .lineLimit(1)
-            .tag(node.url)
+        rootVolume = VolumeInfo.containing(root)
     }
 }
 
@@ -259,11 +250,17 @@ private struct FolderIconView: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 8) {
                     if location == nil {
-                        ForEach(tree.favorites + tree.volumes) { node in
-                            FolderIconCell(url: node.url, name: node.displayName,
-                                           isSelected: browser.currentFolder == node.url,
-                                           onSelect: { browser.open(folder: node.url) },
-                                           onEnter: { location = node.url })
+                        ForEach(tree.favorites, id: \.self) { url in
+                            FolderIconCell(url: url, name: FolderTree.displayName(url),
+                                           isSelected: browser.currentFolder == url,
+                                           onSelect: { browser.open(folder: url) },
+                                           onEnter: { location = url })
+                        }
+                        ForEach(tree.volumes, id: \.url) { v in
+                            FolderIconCell(url: v.url, name: v.name, volumeKind: v.kind,
+                                           isSelected: browser.currentFolder == v.url,
+                                           onSelect: { browser.open(folder: v.url) },
+                                           onEnter: { location = v.url })
                         }
                     } else {
                         ForEach(subfolders, id: \.self) { url in
@@ -289,7 +286,7 @@ private struct FolderIconView: View {
     private func goUp() {
         guard let loc = location else { return }
         // よく使う項目・ボリュームの位置まで来たらルート一覧に戻る
-        let roots = Set((tree.favorites + tree.volumes).map(\.url.standardizedFileURL))
+        let roots = Set((tree.favorites + tree.volumes.map(\.url)).map(\.standardizedFileURL))
         if roots.contains(loc.standardizedFileURL) || loc.path == "/" {
             location = nil
         } else {
@@ -301,6 +298,7 @@ private struct FolderIconView: View {
 private struct FolderIconCell: View {
     let url: URL
     let name: String
+    var volumeKind: VolumeKind?
     let isSelected: Bool
     let onSelect: () -> Void
     let onEnter: () -> Void
@@ -310,6 +308,16 @@ private struct FolderIconCell: View {
             Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
                 .resizable()
                 .frame(width: 48, height: 48)
+                .overlay(alignment: .bottomTrailing) {
+                    // ボリュームは種類の印を付ける（外付けはオレンジ）
+                    if let k = volumeKind {
+                        Image(systemName: k.symbolName)
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color(nsColor: k.tint))
+                            .padding(3)
+                            .background(.regularMaterial, in: Circle())
+                    }
+                }
             Text(name)
                 .font(.caption)
                 .lineLimit(2)
@@ -322,7 +330,8 @@ private struct FolderIconCell: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { onEnter() }
         .simultaneousGesture(TapGesture().onEnded { onSelect() })
-        .help("クリックで表示、ダブルクリックで中に入る")
+        .help(volumeKind.map { "\($0.sectionTitle)：クリックで表示、ダブルクリックで中に入る" }
+              ?? "クリックで表示、ダブルクリックで中に入る")
         .folderContextMenu(url)
     }
 }
