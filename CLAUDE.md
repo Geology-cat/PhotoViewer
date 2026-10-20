@@ -80,5 +80,6 @@ Scripts/           テストデータ生成などの補助スクリプト
 - `...FromImageIfAbsent` は小さな EXIF サムネイルを返すことがある。要求サイズより極端に小さければ、RAW 以外は `...FromImageAlways` で作り直す。
 
 ## Git
-- リポジトリ：GitHub `Geology-cat/PhotoViewer`（private）
+- リポジトリ：GitHub `Geology-cat/PhotoViewer`（**public**）。公開リポジトリなので、個人情報・機密情報をコミットしない。
+- コミットの作者メールは GitHub の匿名アドレス（`262972311+Geology-cat@users.noreply.github.com`、このリポジトリの git config に設定済み）。
 - コミットメッセージは日本語。末尾に `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` を付ける。
