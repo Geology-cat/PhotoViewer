@@ -7,6 +7,7 @@ struct PhotoViewerApp: App {
     @State private var tree = FolderTree()
     @State private var settings = AppSettings()
     @AppStorage("inspector.visible") private var showInspector = true
+    @AppStorage("sidebar.listRoot") private var listRoot = ""
 
     var body: some Scene {
         Window("PhotoViewer", id: "main") {
@@ -54,6 +55,9 @@ struct PhotoViewerApp: App {
                 .disabled(targets.isEmpty)
             }
             CommandGroup(after: .sidebar) {
+                Button("上の階層へ") { SidebarNavigation.goUp(rootPath: &listRoot, browser: browser) }
+                    .keyboardShortcut(.upArrow, modifiers: .command)
+                    .disabled(listRoot.isEmpty)
                 Button(showInspector ? "プレビューと情報を隠す" : "プレビューと情報を表示") { showInspector.toggle() }
                     .keyboardShortcut("i", modifiers: [.command, .control])
                 Button("再読み込み") { browser.reload() }

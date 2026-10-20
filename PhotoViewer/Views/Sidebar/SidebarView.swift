@@ -61,6 +61,12 @@ private struct FolderListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // どの階層にいても、ドライブへすぐ移れるタブ
+            DriveTabBar(volumes: tree.volumes, activeVolume: rootPath.isEmpty ? nil : rootVolume?.url,
+                        isTopActive: rootPath.isEmpty,
+                        onSelectTop: { selectTopTab() },
+                        onSelectVolume: { selectDriveTab($0) })
+            Divider()
             if let root = rootURL {
                 header(root)
                 Divider()
@@ -110,7 +116,6 @@ private struct FolderListView: View {
                     Image(systemName: "chevron.up")
                 }
                 .help("上の階層へ（⌘↑）")
-                .keyboardShortcut(.upArrow, modifiers: .command)
                 .disabled(root.path == "/")
 
                 // フォルダ名は長くても省略表示にして、サイドバーの最小幅を変えない
@@ -184,10 +189,43 @@ private struct FolderListView: View {
         browser.open(folder: url)
     }
 
+    // MARK: ドライブのタブ
+
+    /// ドライブごとに最後にいたフォルダ（タブを切り替えたときに戻るため）
+    private static let tabRootsKey = "sidebar.driveTabRoots"
+
+    private func savedRoot(for volume: URL) -> String? {
+        (UserDefaults.standard.dictionary(forKey: Self.tabRootsKey) as? [String: String])?[volume.path]
+    }
+
+    private func rememberCurrentRoot() {
+        guard !rootPath.isEmpty, let v = rootVolume else { return }
+        var d = (UserDefaults.standard.dictionary(forKey: Self.tabRootsKey) as? [String: String]) ?? [:]
+        d[v.url.path] = rootPath
+        UserDefaults.standard.set(d, forKey: Self.tabRootsKey)
+    }
+
+    private func selectTopTab() {
+        rememberCurrentRoot()
+        rootPath = ""
+    }
+
+    /// タブを押すと、そのドライブで最後にいたフォルダに戻る。表示中のタブをもう一度押すとドライブの一番上へ
+    private func selectDriveTab(_ v: VolumeInfo) {
+        let isActive = !rootPath.isEmpty && rootVolume?.url.standardizedFileURL == v.url.standardizedFileURL
+        rememberCurrentRoot()
+        var target = v.url
+        if !isActive, let saved = savedRoot(for: v.url) {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: saved, isDirectory: &isDir), isDir.boolValue {
+                target = URL(fileURLWithPath: saved, isDirectory: true)
+            }
+        }
+        enter(target)
+    }
+
     private func goUp(from root: URL) {
-        let parent = root.deletingLastPathComponent()
-        rootPath = parent.standardizedFileURL.path
-        browser.open(folder: parent)
+        SidebarNavigation.goUp(rootPath: &rootPath, browser: browser)
     }
 
     /// 自分自身を除く、親フォルダの一覧（近い順）
@@ -214,6 +252,79 @@ private struct FolderListView: View {
             return
         }
         rootVolume = VolumeInfo.containing(root)
+    }
+}
+
+// MARK: - 上の階層へ（ボタンとメニューの ⌘↑ で共通）
+
+@MainActor
+enum SidebarNavigation {
+    /// リスト表示の起点を 1 つ上の階層にする
+    /// 外付け・ディスクイメージなどのドライブの一番上からは /Volumes に行かず、よく使う項目・ドライブの一覧に戻る
+    static func goUp(rootPath: inout String, browser: BrowserState) {
+        guard !rootPath.isEmpty else { return }
+        let root = URL(fileURLWithPath: rootPath, isDirectory: true)
+        if let v = VolumeInfo.containing(root), v.kind != .internal,
+           v.url.standardizedFileURL.path == root.standardizedFileURL.path {
+            rootPath = ""
+            return
+        }
+        guard root.path != "/" else { return }
+        let parent = root.deletingLastPathComponent()
+        rootPath = parent.standardizedFileURL.path
+        browser.open(folder: parent)
+    }
+}
+
+// MARK: - ドライブのタブ
+
+/// サイドバー上部のタブ：「よく使う項目」と各ドライブ（外付けはオレンジ）
+private struct DriveTabBar: View {
+    let volumes: [VolumeInfo]
+    let activeVolume: URL?
+    let isTopActive: Bool
+    let onSelectTop: () -> Void
+    let onSelectVolume: (VolumeInfo) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                tab(title: "よく使う項目", symbol: "star.fill", tint: .systemYellow, active: isTopActive,
+                    help: "よく使う項目・ドライブの一覧", action: onSelectTop)
+                ForEach(volumes, id: \.url) { v in
+                    tab(title: v.name, symbol: v.kind.symbolName, tint: v.kind.tint,
+                        active: activeVolume?.standardizedFileURL == v.url.standardizedFileURL,
+                        help: "\(v.name)（\(v.kind.sectionTitle)）" + (v.capacityText.map { "\n\($0)" } ?? ""),
+                        emphasized: v.kind == .external) { onSelectVolume(v) }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+        }
+        // 横スクロールの中身でサイドバーの最小幅を変えない
+        .frame(minWidth: 0, maxWidth: .infinity)
+    }
+
+    private func tab(title: String, symbol: String, tint: NSColor, active: Bool, help: String,
+                     emphasized: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: symbol)
+                    .foregroundStyle(Color(nsColor: tint))
+                Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 110)
+            }
+            .font(.caption.weight(emphasized || active ? .semibold : .regular))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(active ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.05), in: Capsule())
+            .overlay(Capsule().strokeBorder(emphasized ? Color(nsColor: tint).opacity(0.6) : .clear, lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 }
 
