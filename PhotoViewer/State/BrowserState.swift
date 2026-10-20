@@ -31,6 +31,22 @@ final class BrowserState {
     /// 書き込みエラーなど、ユーザーに知らせるメッセージ
     var alertMessage: String?
 
+    /// 検索・絞り込み・並べ替えの条件
+    var filter = PhotoFilter() {
+        didSet {
+            guard filter != oldValue else { return }
+            if filter.needsMetadata { loadAllMetadata() }
+            recomputeDisplayed()
+        }
+    }
+    /// サブフォルダ内の写真も表示するか
+    var includeSubfolders = false {
+        didSet { if includeSubfolders != oldValue { reload() } }
+    }
+    /// 撮影情報の一括読み込みの進み具合（読み込み中でなければ nil）
+    private(set) var metadataProgress: (done: Int, total: Int)?
+    @ObservationIgnored private var bulkMetadataTask: Task<Void, Never>?
+
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var metadataTasks: [URL: Task<PhotoMetadata, Never>] = [:]
 
@@ -62,6 +78,10 @@ final class BrowserState {
         let folder = folder.standardizedFileURL
         guard folder != currentFolder else { return }
         currentFolder = folder
+        // フォルダを移ったら撮影情報のキャッシュは捨てる（メモリを増やし続けないため）
+        bulkMetadataTask?.cancel()
+        metadataProgress = nil
+        metadataCache = [:]
         UserDefaults.standard.set(folder.path, forKey: Self.lastFolderKey)
         selection = []
         primarySelection = nil
@@ -74,9 +94,10 @@ final class BrowserState {
         guard let folder = currentFolder else { return }
         scanTask?.cancel()
         isScanning = true
+        let recursive = includeSubfolders
         scanTask = Task {
             var result = await Task.detached(priority: .userInitiated) {
-                FolderScanner.scan(folder)
+                FolderScanner.scan(folder, recursive: recursive)
             }.value
             result.items.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             guard !Task.isCancelled, folder == self.currentFolder else { return }
@@ -89,8 +110,70 @@ final class BrowserState {
             self.selection = self.selection.intersection(existing)
             if let p = self.primarySelection, !existing.contains(p) { self.primarySelection = nil }
             self.isScanning = false
+            if self.filter.needsMetadata { self.loadAllMetadata() }
             await self.loadSidecars(Array(result.sidecars.values), folder: folder)
         }
+    }
+
+    /// フォルダ内すべての撮影情報をバックグラウンドで読む（撮影情報で絞り込むときに使う）
+    func loadAllMetadata() {
+        guard bulkMetadataTask == nil else { return }
+        let targets = items.map(\.url).filter { metadataCache[$0] == nil }
+        guard !targets.isEmpty else { return }
+        let folder = currentFolder
+        metadataProgress = (0, targets.count)
+        let start = ContinuousClock.now
+        bulkMetadataTask = Task {
+            defer {
+                self.bulkMetadataTask = nil
+                self.metadataProgress = nil
+            }
+            var done = 0
+            // 200 件ずつ読んで、その都度画面に反映する
+            for chunk in stride(from: 0, to: targets.count, by: 200).map({ Array(targets[$0..<min($0 + 200, targets.count)]) }) {
+                let loaded = await Self.readMetadata(chunk)
+                guard !Task.isCancelled, folder == self.currentFolder else { return }
+                self.metadataCache.merge(loaded) { old, _ in old }
+                done += chunk.count
+                self.metadataProgress = (done, targets.count)
+                self.recomputeDisplayed()
+            }
+            PerfLog.metadataLoaded(count: targets.count, since: start)
+        }
+    }
+
+    /// 並列（同時 4 件まで）で撮影情報を読む
+    nonisolated private static func readMetadata(_ urls: [URL]) async -> [URL: PhotoMetadata] {
+        await withTaskGroup(of: (URL, PhotoMetadata).self) { group in
+            var result: [URL: PhotoMetadata] = [:]
+            var iterator = urls.makeIterator()
+            for _ in 0..<4 {
+                guard let u = iterator.next() else { break }
+                group.addTask { (u, MetadataReader.read(url: u)) }
+            }
+            while let (u, m) = await group.next() {
+                result[u] = m
+                if Task.isCancelled { group.cancelAll(); break }
+                if let next = iterator.next() {
+                    group.addTask { (next, MetadataReader.read(url: next)) }
+                }
+            }
+            return result
+        }
+    }
+
+    /// 読み込み済みの撮影情報にあるカメラ名・レンズ名（絞り込みの候補）
+    var knownCameras: [String] {
+        Set(metadataCache.values.compactMap(\.cameraName)).sorted()
+    }
+
+    var knownLenses: [String] {
+        Set(metadataCache.values.compactMap(\.lensModel)).sorted()
+    }
+
+    /// フォルダ内の拡張子と件数
+    var extensionCounts: [(ext: String, count: Int)] {
+        Dictionary(grouping: items, by: \.ext).map { ($0.key, $0.value.count) }.sorted { $0.ext < $1.ext }
     }
 
     /// サイドカーをまとめて読む（小さいファイルなので一括で読む）
@@ -109,9 +192,21 @@ final class BrowserState {
         tagsDidChange()
     }
 
-    /// 表示用の一覧を作り直す（Phase 4 で絞り込み・並べ替えを入れる）
+    /// 表示用の一覧を作り直す
     func recomputeDisplayed() {
-        displayedItems = items
+        let result = filter.apply(to: items, metadata: metadataCache) { self.tags(for: $0) }
+        if result.map(\.url) != displayedItems.map(\.url) {
+            displayedItems = result
+        }
+        // 非表示になったファイルは選択から外す（見えないファイルにレーティングを付けないため）
+        if filter.isFiltering {
+            let visible = Set(result.map(\.url))
+            let pruned = selection.intersection(visible)
+            if pruned != selection { selection = pruned }
+            if let p = primarySelection, !visible.contains(p) {
+                primarySelection = displayedItems.first { pruned.contains($0.url) }?.url
+            }
+        }
     }
 
     // MARK: - 選択
@@ -143,6 +238,8 @@ final class BrowserState {
         let m = await task.value
         metadataCache[url] = m
         metadataTasks[url] = nil
+        // ファイル内のレーティングで表示が変わることがある
+        if m.embeddedRating != nil { tagsDidChange() }
         return m
     }
 
@@ -162,6 +259,9 @@ final class BrowserState {
 
     private func tagsDidChange() {
         tagsVersion &+= 1
+        if filter.rating != .all || filter.developed != .all || filter.sortKey == .rating {
+            recomputeDisplayed()
+        }
     }
 
     func setRating(_ rating: Int, for urls: [URL]) {

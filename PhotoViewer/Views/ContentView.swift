@@ -10,8 +10,10 @@ struct ContentView: View {
     @AppStorage(GridSettings.thumbnailSizeKey) private var thumbnailSize = GridSettings.defaultSize
     @AppStorage(GridSettings.columnsKey) private var columns = GridSettings.defaultColumns
     @AppStorage(GridSettings.showNamesKey) private var showNames = true
+    @State private var showFilter = false
 
     var body: some View {
+        @Bindable var browser = browser
         NavigationSplitView {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 180, ideal: 230, max: 400)
@@ -25,6 +27,7 @@ struct ContentView: View {
         .navigationTitle(browser.currentFolder?.lastPathComponent ?? "PhotoViewer")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
+        .searchable(text: $browser.filter.text, placement: .toolbar, prompt: "ファイル名・カメラ・レンズ")
         .onAppear { browser.restoreLastFolder() }
         .alert("エラー", isPresented: Binding(
             get: { browser.alertMessage != nil },
@@ -39,7 +42,10 @@ struct ContentView: View {
     private var subtitle: String {
         guard browser.currentFolder != nil else { return "" }
         let n = browser.displayedItems.count
-        return browser.selection.count > 1 ? "\(n) 枚（\(browser.selection.count) 枚選択）" : "\(n) 枚"
+        var s = browser.filter.isFiltering ? "\(n) / \(browser.items.count) 枚" : "\(n) 枚"
+        if browser.selection.count > 1 { s += "（\(browser.selection.count) 枚選択）" }
+        if let p = browser.metadataProgress { s += " ・撮影情報を読み込み中 \(p.done)/\(p.total)" }
+        return s
     }
 
     @ViewBuilder
@@ -68,7 +74,11 @@ struct ContentView: View {
                 if browser.isScanning && browser.items.isEmpty {
                     ProgressView()
                 } else if !browser.isScanning && browser.displayedItems.isEmpty {
-                    Text("写真がありません").foregroundStyle(.secondary)
+                    if browser.filter.isFiltering && !browser.items.isEmpty {
+                        ContentUnavailableView.search
+                    } else {
+                        Text("写真がありません").foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -77,6 +87,34 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+                showFilter.toggle()
+            } label: {
+                Label("絞り込み", systemImage: browser.filter.isFiltering
+                      ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            }
+            .help("絞り込み・詳細検索")
+            .popover(isPresented: $showFilter, arrowEdge: .bottom) {
+                FilterPanel()
+            }
+
+            Menu {
+                let b = Bindable(browser)
+                Picker("並べ替え", selection: b.filter.sortKey) {
+                    ForEach(SortKey.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+                Divider()
+                Picker("順序", selection: b.filter.ascending) {
+                    Text("昇順").tag(true)
+                    Text("降順").tag(false)
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label("並べ替え", systemImage: "arrow.up.arrow.down")
+            }
+            .help("並べ替え：\(browser.filter.sortKey.label)")
+
             Picker("並べ方", selection: $gridMode) {
                 ForEach(GridLayoutMode.allCases) { Text($0.label).tag($0) }
             }

@@ -26,6 +26,10 @@ enum PerfLog {
         log("最初のサムネイル表示 \(label): \(ms(t.duration(to: .now)))")
     }
 
+    static func metadataLoaded(count: Int, since start: ContinuousClock.Instant) {
+        log("撮影情報の一括読み込み: \(count) 件 \(ms(start.duration(to: .now)))")
+    }
+
     private static func ms(_ d: Duration) -> String {
         let c = d.components
         return String(format: "%.0f ms", Double(c.seconds) * 1000 + Double(c.attoseconds) / 1e15)
