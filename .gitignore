@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Xcode（XcodeGen で生成するため project.yml のみ管理する）
+*.xcodeproj/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+
+# テストデータ（Scripts/generate_testdata.swift で生成）
+TestData/
