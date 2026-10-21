@@ -52,6 +52,7 @@ open build/Build/Products/Debug/PhotoViewer.app
 ./Legacy/Scripts/build.sh release    # dist/PhotoViewer Legacy.app
 ./Legacy/Scripts/build_dmg.sh        # dist/PhotoViewerLegacy-<バージョン>.dmg（HFS+。10.12 は APFS の DMG を開けない）
 ```
+- バージョンは `Legacy/project.yml` の `MARKETING_VERSION`（通常版とは別に数える）。GitHub リリースは `gh release create legacy-v<バージョン> dist/PhotoViewerLegacy-<バージョン>.dmg --latest=false`（通常版が「Latest」のままになるように）。
 - **処理部分は通常版のファイルを共有する**（`Legacy/project.yml` の sources を参照）。共有ファイルでは、10.12 で使えないもの（async/await・actor・`MainActor`・CryptoKit・UTType・新しい FileHandle API など）を使わないか、`#if LEGACY` / `#available` で切り替える。共有ファイルを変えたら両方をビルドする。
 - 共有している主なもの：Models、FolderScanner、PhotoFilter、RenameService、TIFFCompositeReader、MetadataReader、XMPSidecar、ThumbnailDiskCache、ThumbnailLoader、VideoSupport、DirectoryEventWatcher、GridSettings、`Views/Grid/GridComponents.swift`（グリッドの並べ方・クリック・キー操作・Quick Look）、`Views/Inspector/PreviewGeometry.swift`（拡大・回転の計算）。
 - レガシー版だけのもの：`BrowserModel`（状態。変更は NotificationCenter で知らせる）、GCD 版の読み込み（`LegacyLoaders.swift`）、AppKit の画面、コードで描いたアイコン（`LegacyIcons`。SF Symbols は 11 以降）。

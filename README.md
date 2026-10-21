@@ -51,6 +51,7 @@ Adobe Bridge の代わりに使う、軽量な macOS 用の写真閲覧アプリ
 ## レガシー版（macOS 10.12 向け）
 
 macOS 10.12 Sierra でも使える「PhotoViewer Legacy」を `Legacy/` で開発しています（機能は通常版と同じ。HEIC・HEVC 動画・CR3 など、10.12 の OS が読めない形式は表示できません）。
+[リリース](https://github.com/Geology-cat/PhotoViewer/releases) の `legacy-v` で始まるものから `PhotoViewerLegacy-<バージョン>.dmg` をダウンロードし、中の「かんたんインストーラ」を実行してください。
 
 ## ビルド
 ```bash
