@@ -50,6 +50,20 @@ enum StressTest {
         return NSApp.windows.lazy.compactMap { $0.contentView.flatMap(find) }.first
     }
 
+    /// セルの間隔（横・縦）と、最後の行の並び（間隔が広がっていないか）を記録する
+    private static func logGaps(_ size: Double) {
+        guard let cv = collectionView else { return }
+        cv.layoutSubtreeIfNeeded()
+        let count = cv.numberOfItems(inSection: 0)
+        let frames = (0..<count).compactMap { cv.layoutAttributesForItem(at: IndexPath(item: $0, section: 0))?.frame }
+        guard frames.count > 1 else { return }
+        let firstRow = frames.filter { $0.minY == frames[0].minY }
+        let lastRow = frames.filter { $0.minY == frames[frames.count - 1].minY }
+        func gaps(_ row: [NSRect]) -> Set<Int> { Set(zip(row, row.dropFirst()).map { Int(($1.minX - $0.maxX).rounded()) }) }
+        let vertical = frames.first { $0.minY > frames[0].minY }.map { Int(($0.minY - frames[0].maxY).rounded()) }
+        log("大きさ \(Int(size))：\(firstRow.count) 列、セル \(Int(frames[0].width)) pt、横の間隔 \(gaps(firstRow).sorted())、縦の間隔 \(vertical ?? -1)、最後の行 \(lastRow.count) 個の間隔 \(gaps(lastRow).sorted())、左端 \(Int(frames[0].minX))/\(Int(lastRow[0].minX))")
+    }
+
     /// ←→ キーが行の端で前後の行へ回り込むか（実際のキーイベントをグリッドに送って確かめる）
     private static func checkArrowWrap(_ browser: BrowserState) {
         guard let cv = collectionView, let window = cv.window, browser.displayedItems.count > 2,
@@ -98,6 +112,7 @@ enum StressTest {
             for size in [100.0, 140, 200, 260, 120, 160] {
                 defaults.set(size, forKey: GridSettings.thumbnailSizeKey)
                 await pause(150)
+                logGaps(size)
             }
 
             log("選択を次々に動かす（矢印キーの連打の代わり）")

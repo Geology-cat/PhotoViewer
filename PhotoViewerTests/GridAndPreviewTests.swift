@@ -53,3 +53,28 @@ struct GridAndPreviewTests {
                                    rotation: 0, in: box) == .zero)
     }
 }
+
+struct GridLayoutTests {
+    @Test func サイズ指定でもセルの間隔は一定で余りはセルを大きくして埋める() {
+        // 幅 700（余白を除いた幅）、大きさ 260：2 列に並べ、間隔 8 のまま 1 つ 346 にする
+        let r = GridLayout.columnsAndSide(available: 700, mode: .size, thumbnailSize: 260, columns: 4, spacing: 8)
+        #expect(r.columns == 2)
+        #expect(r.side == 346)
+        // 並べたときの合計が幅を超えない
+        for size in stride(from: 80.0, through: 400, by: 7) {
+            for width in stride(from: 100.0, through: 2000, by: 37) {
+                let r = GridLayout.columnsAndSide(available: width, mode: .size, thumbnailSize: size, columns: 4, spacing: 8)
+                let total = r.side * CGFloat(r.columns) + 8 * CGFloat(r.columns - 1)
+                #expect(total <= width && width - total < CGFloat(r.columns))
+                // 大きさは指定以上（1 列にも入らない狭い幅のときは幅いっぱい）
+                #expect(r.side >= min(size, width) - 1)
+            }
+        }
+    }
+
+    @Test func 列数指定() {
+        let r = GridLayout.columnsAndSide(available: 700, mode: .columns, thumbnailSize: 160, columns: 4, spacing: 8)
+        #expect(r.columns == 4)
+        #expect(r.side == 169)
+    }
+}
