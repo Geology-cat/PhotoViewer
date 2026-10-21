@@ -50,6 +50,32 @@ enum StressTest {
         return NSApp.windows.lazy.compactMap { $0.contentView.flatMap(find) }.first
     }
 
+    /// ←→ キーが行の端で前後の行へ回り込むか（実際のキーイベントをグリッドに送って確かめる）
+    private static func checkArrowWrap(_ browser: BrowserState) {
+        guard let cv = collectionView, let window = cv.window, browser.displayedItems.count > 2,
+              let firstY = cv.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))?.frame.minY else { return }
+        let count = browser.displayedItems.count
+        let columns = (0..<count).prefix { cv.layoutAttributesForItem(at: IndexPath(item: $0, section: 0))?.frame.minY == firstY }.count
+        guard columns < count else { return }
+        func press(_ keyCode: UInt16, _ ch: Int) {
+            let s = UnicodeScalar(UInt32(ch)).map { String(Character($0)) } ?? ""
+            guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.function, .numericPad],
+                                           timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                           characters: s, charactersIgnoringModifiers: s, isARepeat: false,
+                                           keyCode: keyCode) else { return }
+            cv.keyDown(with: e)
+        }
+        let lastInRow = browser.displayedItems[columns - 1].url
+        browser.updateSelection([lastInRow], lastAdded: lastInRow)
+        cv.selectionIndexPaths = [IndexPath(item: columns - 1, section: 0)]
+        (cv as PhotoCollectionView).resetAnchor(to: IndexPath(item: columns - 1, section: 0))
+        press(124, 0xF703)   // →
+        let right = browser.primarySelection == browser.displayedItems[columns].url
+        press(123, 0xF702)   // ←
+        let left = browser.primarySelection == lastInRow
+        log("←→ の回り込み（\(columns) 列）：→ \(right ? "OK" : "NG")、← \(left ? "OK" : "NG")")
+    }
+
     private static func run(browser: BrowserState, folders: [URL], writable: URL?) async {
         let defaults = UserDefaults.standard
         for folder in folders {
@@ -79,6 +105,8 @@ enum StressTest {
                 browser.updateSelection([item.url], lastAdded: item.url)
                 await pause(60)
             }
+
+            checkArrowWrap(browser)
 
             log("並べ替えを全種類")
             for key in SortKey.allCases {

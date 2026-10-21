@@ -21,6 +21,7 @@ private struct GeneralSettingsView: View {
     @AppStorage(GridSettings.thumbnailSizeKey) private var thumbnailSize = GridSettings.defaultSize
     @AppStorage(GridSettings.columnsKey) private var columns = GridSettings.defaultColumns
     @AppStorage(GridSettings.showNamesKey) private var showNames = true
+    @AppStorage(PreviewSettings.zoomPercentKey) private var zoomPercent = PreviewSettings.defaultZoomPercent
 
     var body: some View {
         Form {
@@ -41,6 +42,14 @@ private struct GeneralSettingsView: View {
                 }
                 .disabled(gridMode != .columns)
                 Toggle("ファイル名を表示", isOn: $showNames)
+            }
+            Section("プレビュー") {
+                Picker("クリックしたときの拡大率", selection: $zoomPercent) {
+                    ForEach(PreviewSettings.zoomPercents, id: \.self) { Text("\($0)%").tag($0) }
+                }
+                Text("100% は画像の 1 ピクセルを画面の 1 ピクセルで表示します。拡大中はドラッグで動かせ、もう一度クリックすると全体表示に戻ります。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

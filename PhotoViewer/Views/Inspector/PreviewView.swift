@@ -28,16 +28,10 @@ struct PreviewView: View {
         GeometryReader { geo in
             let pixel = ThumbnailLoader.bucket(for: Int(max(geo.size.width, geo.size.height) * displayScale))
             ZStack {
-                if let image, let url = item?.url, loadedURL == url {
-                    let rotation = browser.previewRotation[url] ?? 0
-                    let size = Self.fittedSize(image.size, rotation: rotation, in: geo.size)
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: size.width, height: size.height)
-                        .rotationEffect(.degrees(Double(rotation)))
-                        .animation(.easeInOut(duration: 0.2), value: rotation)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let image, let item, loadedURL == item.url {
+                    // 別の写真に変わったら拡大を解除する
+                    ZoomableImage(item: item, image: image, rotation: browser.previewRotation[item.url] ?? 0, box: geo.size)
+                        .id(item.url)
                 } else if item == nil {
                     Text(selectionCount > 1 ? "\(selectionCount) 件を選択中" : "画像を選択してください")
                         .foregroundStyle(.secondary)
@@ -106,6 +100,162 @@ struct PreviewView: View {
     nonisolated private static func loadPreview(_ url: URL, pixel: Int) async -> CGImage? {
         if Task.isCancelled { return nil }
         return await ThumbnailLoader.shared.load(url, pixelSize: pixel, allowFullDecode: true)
+    }
+}
+
+/// プレビューの設定（@AppStorage のキーと選択肢）
+enum PreviewSettings {
+    /// クリックしたときの拡大率（%）。100% は画像の 1 ピクセルを画面の 1 ピクセルで表示する
+    static let zoomPercentKey = "preview.zoomPercent"
+    static let zoomPercents = [50, 100, 200, 400]
+    static let defaultZoomPercent = 100
+}
+
+/// クリックで拡大し、拡大中はドラッグで動かせる画像
+/// - クリック：その場所を中心に拡大（拡大率は環境設定）。拡大中にクリックすると全体表示に戻る
+/// - ドラッグ：拡大中の画像を動かす
+private struct ZoomableImage: View {
+    @Environment(BrowserState.self) private var browser
+    @Environment(\.displayScale) private var displayScale
+    @AppStorage(PreviewSettings.zoomPercentKey) private var zoomPercent = PreviewSettings.defaultZoomPercent
+    let item: PhotoItem
+    /// 枠に合わせて読み込んだ画像
+    let image: NSImage
+    let rotation: Int
+    let box: CGSize
+
+    @State private var zoomed = false
+    @State private var offset: CGSize = .zero
+    @State private var dragStart: CGSize?
+    @State private var isDragging = false
+    /// 元の画像の長辺のピクセル数（撮影情報から。分かるまでは読み込んだ画像の大きさを使う）
+    @State private var originalLongSide: CGFloat?
+    /// 拡大用に読み直した高解像度の画像
+    @State private var detail: NSImage?
+    @State private var detailTask: Task<Void, Never>?
+
+    private var fitSize: CGSize { PreviewView.fittedSize(image.size, rotation: rotation, in: box) }
+
+    /// 拡大したときの大きさ（回転前の向き、ポイント）
+    private var zoomSize: CGSize {
+        ZoomGeometry.zoomSize(fit: fitSize, originalLongSide: originalLongSide ?? max(image.size.width, image.size.height),
+                              percent: zoomPercent, displayScale: displayScale)
+    }
+
+    private var displaySize: CGSize { zoomed ? zoomSize : fitSize }
+
+    var body: some View {
+        let size = displaySize
+        Image(nsImage: detail ?? image)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: size.width, height: size.height)
+            .rotationEffect(.degrees(Double(rotation)))
+            .offset(offset)
+            .frame(width: box.width, height: box.height)
+            .clipped()
+            .contentShape(Rectangle())
+            .gesture(dragOrClick)
+            .pointerStyle(zoomed ? (isDragging ? .grabActive : .grabIdle) : .zoomIn)
+            .animation(.easeInOut(duration: 0.2), value: rotation)
+            .help(zoomed ? "ドラッグで移動、クリックで全体表示に戻る" : "クリックで拡大（\(zoomPercent)%）")
+            .task { await loadOriginalSize() }
+            .onChange(of: rotation) {
+                withAnimation(.easeOut(duration: 0.15)) { zoomed = false; offset = .zero }
+            }
+            .onChange(of: box) { offset = clamped(offset) }
+            .onDisappear { detailTask?.cancel() }
+    }
+
+    /// クリック（ほとんど動かさずに離した）とドラッグを 1 つのジェスチャで見分ける
+    private var dragOrClick: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .onChanged { value in
+                guard zoomed else { return }
+                if dragStart == nil { dragStart = offset }
+                if hypot(value.translation.width, value.translation.height) > 3 { isDragging = true }
+                guard isDragging, let start = dragStart else { return }
+                offset = clamped(CGSize(width: start.width + value.translation.width,
+                                        height: start.height + value.translation.height))
+            }
+            .onEnded { value in
+                let wasDragging = isDragging
+                dragStart = nil
+                isDragging = false
+                if !wasDragging { toggleZoom(at: value.location) }
+            }
+    }
+
+    private func toggleZoom(at point: CGPoint) {
+        if zoomed {
+            withAnimation(.easeOut(duration: 0.15)) { zoomed = false; offset = .zero }
+            return
+        }
+        let target = ZoomGeometry.offsetKeeping(point, in: box, fit: fitSize, zoom: zoomSize)
+        withAnimation(.easeOut(duration: 0.15)) {
+            zoomed = true
+            offset = clamped(target)
+        }
+        loadDetailIfNeeded()
+    }
+
+    /// 画像が枠の外へ行き過ぎないように、ずらす量を制限する
+    private func clamped(_ o: CGSize) -> CGSize {
+        ZoomGeometry.clamp(o, size: displaySize, rotation: rotation, in: box)
+    }
+
+    private func loadOriginalSize() async {
+        let m = await browser.metadata(for: item.url)
+        if let w = m.pixelWidth, let h = m.pixelHeight, w > 0, h > 0 {
+            originalLongSide = CGFloat(max(w, h))
+        }
+    }
+
+    /// 拡大に足りない解像度なら、必要な大きさで読み直す（バックグラウンド）
+    private func loadDetailIfNeeded() {
+        let needed = Int(max(zoomSize.width, zoomSize.height) * max(displayScale, 1))
+        let original = Int(originalLongSide ?? 0)
+        let target = min(original > 0 ? min(needed, original) : needed, 16384)
+        let current = Int(max(image.size.width, image.size.height))
+        guard detail == nil, detailTask == nil, target > current + current / 20 else { return }
+        let url = item.url
+        detailTask = Task {
+            let cg = await Task.detached(priority: .userInitiated) {
+                ThumbnailLoader.makeImage(url: url, maxPixel: target, allowFullDecode: true)
+            }.value
+            guard !Task.isCancelled, let cg else { return }
+            detail = NSImage(cgImage: cg, size: .zero)
+        }
+    }
+}
+
+/// 拡大表示の計算（画面に依存しない部分）
+enum ZoomGeometry {
+    /// 拡大したときの大きさ。percent は元画像に対する倍率（100 で画像の 1 ピクセル = 画面の 1 ピクセル）
+    /// 拡大率どおりだと全体表示とほとんど変わらない（小さな画像など）ときは、全体表示の 2 倍にする
+    static func zoomSize(fit: CGSize, originalLongSide: CGFloat, percent: Int, displayScale: CGFloat) -> CGSize {
+        let fitLong = max(fit.width, fit.height)
+        guard fitLong > 0 else { return fit }
+        var long = originalLongSide * CGFloat(percent) / 100 / max(displayScale, 1)
+        if long < fitLong * 1.2 { long = fitLong * 2 }
+        let k = long / fitLong
+        return CGSize(width: fit.width * k, height: fit.height * k)
+    }
+
+    /// クリックした場所の画像が、拡大後も同じ画面位置に来るようにするためのずらし量
+    static func offsetKeeping(_ point: CGPoint, in box: CGSize, fit: CGSize, zoom: CGSize) -> CGSize {
+        let k = max(zoom.width, zoom.height) / max(max(fit.width, fit.height), 1)
+        let dx = point.x - box.width / 2, dy = point.y - box.height / 2
+        return CGSize(width: dx * (1 - k), height: dy * (1 - k))
+    }
+
+    /// 画像が枠の外へ行き過ぎない（端が枠の内側に入り込まない）ように、ずらす量を制限する
+    static func clamp(_ o: CGSize, size: CGSize, rotation: Int, in box: CGSize) -> CGSize {
+        let quarter = abs(rotation / 90) % 2 == 1
+        let w = quarter ? size.height : size.width
+        let h = quarter ? size.width : size.height
+        let maxX = max(0, (w - box.width) / 2), maxY = max(0, (h - box.height) / 2)
+        return CGSize(width: min(max(o.width, -maxX), maxX), height: min(max(o.height, -maxY), maxY))
     }
 }
 

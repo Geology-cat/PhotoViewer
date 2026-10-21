@@ -304,7 +304,10 @@ final class PhotoCollectionView: NSCollectionView {
     func resetAnchor(to path: IndexPath?) {
         anchor = path
         anchorBase = selectionIndexPaths
+        cursor = path
     }
+    /// ←→ キーで最後に移動した位置（Shift で範囲を広げているときの先端）
+    private var cursor: IndexPath?
     /// 複数選択中の選択済みセルをクリックしたとき、ダブルクリックでなければ少し後で 1 つにする
     private var pendingCollapse: DispatchWorkItem?
 
@@ -326,6 +329,7 @@ final class PhotoCollectionView: NSCollectionView {
         let flags = event.modifierFlags.intersection([.command, .shift])
         let previous = lastClickedPath
         lastClickedPath = path
+        cursor = path
 
         if event.clickCount >= 2 {
             pendingCollapse?.cancel()
@@ -395,9 +399,48 @@ final class PhotoCollectionView: NSCollectionView {
             if !urls.isEmpty { onTrash?(urls) }
         } else if plain, chars == " " { // Space：Quick Look
             toggleQuickLook()
+        } else if plain, event.keyCode == 123 || event.keyCode == 124 { // ← →：行の端では前後の行へ回り込む
+            moveHorizontally(by: event.keyCode == 124 ? 1 : -1, extend: event.modifierFlags.contains(.shift))
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    /// ←→ キーの移動先（並び順で 1 つ前後。先頭・末尾では止まる。何も選んでいなければ先頭か末尾）
+    nonisolated static func horizontalTarget(from current: Int?, delta: Int, count: Int) -> Int {
+        guard let current else { return delta > 0 ? 0 : count - 1 }
+        return min(max(current + delta, 0), count - 1)
+    }
+
+    /// ←→ キーで 1 つ前後へ移動する
+    /// 標準の動作は行の端で止まるため、Finder と同じように行の右端の次は次の行の左端、左端の前は前の行の右端へ進める
+    /// - Parameter extend: Shift を押しているとき。起点から移動先までを選択する
+    private func moveHorizontally(by delta: Int, extend: Bool) {
+        let count = numberOfSections > 0 ? numberOfItems(inSection: 0) : 0
+        guard count > 0 else { return }
+        let current = cursor.flatMap { selectionIndexPaths.contains($0) ? $0 : nil }
+            ?? (delta > 0 ? selectionIndexPaths.max() : selectionIndexPaths.min())
+        let item = Self.horizontalTarget(from: current?.item, delta: delta, count: count)
+        let next = IndexPath(item: item, section: 0)
+        let newSelection: Set<IndexPath>
+        if extend {
+            let start = anchor ?? current ?? next
+            if anchor == nil {
+                anchor = start
+                anchorBase = selectionIndexPaths
+            }
+            let lo = min(start.item, item), hi = max(start.item, item)
+            newSelection = anchorBase.union((lo...hi).map { IndexPath(item: $0, section: 0) })
+        } else {
+            newSelection = [next]
+            anchor = next
+            anchorBase = [next]
+        }
+        cursor = next
+        pendingCollapse?.cancel()
+        pendingCollapse = nil
+        scrollToItems(at: [next], scrollPosition: .nearestHorizontalEdge)
+        applyClickSelection(newSelection, added: [next])
     }
 
     // MARK: - Quick Look
