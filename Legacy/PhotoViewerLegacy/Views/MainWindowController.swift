@@ -213,6 +213,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        let item = makeItem(id)
+        // サイドバー・戻る/進むは左端に置く（macOS 11 以降はタイトルと同じ段に並ぶので、タイトルより左に置く印を付ける。
+        // 10.12 ではタイトルの下の段に並ぶので、もともと左端になる）
+        if #available(macOS 11.0, *), id == ItemID.sidebar || id == ItemID.navigation {
+            item?.isNavigational = true
+        }
+        return item
+    }
+
+    private func makeItem(_ id: NSToolbarItem.Identifier) -> NSToolbarItem? {
         switch id {
         case ItemID.sidebar:
             return item(id, label: "サイドバー", tip: "サイドバーの表示／非表示（⌃⌘S）",
