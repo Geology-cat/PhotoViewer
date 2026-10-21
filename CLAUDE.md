@@ -22,7 +22,7 @@ Adobe Bridge の代わりに使う、軽量な macOS 用写真閲覧アプリ（
 ```
 - バージョンは `project.yml` の `MARKETING_VERSION`。
 - インストーラの元は `Scripts/installer/かんたんインストーラ.applescript`（osacompile で .scpt にして同梱）。
-- GitHub リリース：`gh release create v<バージョン> dist/PhotoViewer-<バージョン>.dmg`。
+- GitHub リリース：**通常版とレガシー版の DMG を 1 つのリリースにまとめる**（GitHub のリリース一覧は新しい順で固定できず、レガシー版だけのリリースは下に流れて見つけにくいため）。`gh release create v<バージョン> dist/PhotoViewer-<バージョン>.dmg dist/PhotoViewerLegacy-<レガシー版のバージョン>.dmg`。タイトルは「PhotoViewer 1.1.5（レガシー版 1.0.1）」のようにし、説明に macOS 10.12 の方向けの案内を入れる。レガシー版に変更がないときも、最新の DMG を添付する。
 - 署名は Apple Development（Developer ID ではなく公証もしていない）なので、配布先では隔離属性の削除が必要。インストーラがこれを行う。
 
 ## ビルド・テスト
@@ -53,7 +53,7 @@ open build/Build/Products/Debug/PhotoViewer.app
 ./Legacy/Scripts/build.sh release    # dist/PhotoViewer Legacy.app
 ./Legacy/Scripts/build_dmg.sh        # dist/PhotoViewerLegacy-<バージョン>.dmg（HFS+。10.12 は APFS の DMG を開けない）
 ```
-- バージョンは `Legacy/project.yml` の `MARKETING_VERSION`（通常版とは別に数える）。GitHub リリースは `gh release create legacy-v<バージョン> dist/PhotoViewerLegacy-<バージョン>.dmg --latest=false`（通常版が「Latest」のままになるように）。
+- バージョンは `Legacy/project.yml` の `MARKETING_VERSION`（通常版とは別に数える）。GitHub リリースは通常版と同じリリースに DMG を添付する（「リリース（DMG）」を参照。レガシー版だけのリリースは作らない）。
 - **処理部分は通常版のファイルを共有する**（`Legacy/project.yml` の sources を参照）。共有ファイルでは、10.12 で使えないもの（async/await・actor・`MainActor`・CryptoKit・UTType・新しい FileHandle API など）を使わないか、`#if LEGACY` / `#available` で切り替える。共有ファイルを変えたら両方をビルドする。
 - 共有している主なもの：Models、FolderScanner、PhotoFilter、RenameService、TIFFCompositeReader、MetadataReader、XMPSidecar、ThumbnailDiskCache、ThumbnailLoader、VideoSupport、DirectoryEventWatcher、GridSettings、`Views/Grid/GridComponents.swift`（グリッドの並べ方・クリック・キー操作・Quick Look）、`Views/Inspector/PreviewGeometry.swift`（拡大・回転の計算）。
 - レガシー版だけのもの：`BrowserModel`（状態。変更は NotificationCenter で知らせる）、GCD 版の読み込み（`LegacyLoaders.swift`）、AppKit の画面、コードで描いたアイコン（`LegacyIcons`。SF Symbols は 11 以降）。
