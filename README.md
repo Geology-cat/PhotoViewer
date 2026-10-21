@@ -5,7 +5,7 @@ Adobe Bridge の代わりに使う、軽量な macOS 用の写真閲覧アプリ
 ![画面](docs/screenshot.jpg)
 
 ## インストール
-1. [リリース](https://github.com/Geology-cat/PhotoViewer/releases) から `PhotoViewer-1.0.0.dmg` をダウンロードして開く
+1. [リリース](https://github.com/Geology-cat/PhotoViewer/releases) から最新の `PhotoViewer-<バージョン>.dmg`（現在は 1.0.1）をダウンロードして開く
 2. DMG の中の「かんたんインストーラ.scpt」をダブルクリック → スクリプトエディタの ▶︎（実行）を押す
    - 「アプリケーション」フォルダへのコピー、Gatekeeper の制限の解除（隔離属性の削除）、初回起動までを自動で行う
    - 手動で入れる場合は、PhotoViewer.app を Applications へドラッグし、`xattr -dr com.apple.quarantine /Applications/PhotoViewer.app` を実行する
