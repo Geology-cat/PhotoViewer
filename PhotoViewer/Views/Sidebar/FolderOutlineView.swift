@@ -42,6 +42,8 @@ struct FolderOutlineView: NSViewRepresentable {
     /// 起点フォルダ（nil = 最上位：よく使う項目・ボリューム）
     var root: URL?
     var favorites: [URL]
+    /// よく使う項目の表示名（バックグラウンドで用意したもの）
+    var favoriteNames: [URL: String] = [:]
     var volumes: [VolumeInfo]
     var currentFolder: URL?
     var onSelect: (URL) -> Void
@@ -126,14 +128,15 @@ struct FolderOutlineView: NSViewRepresentable {
             return it
         }
 
-        private func folderItem(_ url: URL, parentKey: String) -> FolderItem {
-            item(key: "\(parentKey)>\(url.path)", kind: .folder, url: url, title: FolderTree.displayName(url))
+        /// 表示名はバックグラウンドで求めたものを渡す（なければフォルダ名）
+        private func folderItem(_ url: URL, parentKey: String, title: String? = nil) -> FolderItem {
+            item(key: "\(parentKey)>\(url.path)", kind: .folder, url: url, title: title ?? url.lastPathComponent)
         }
 
         /// 起点・お気に入り・ボリュームが変わったときだけ作り直す（他の再描画では何もしない）
         func rebuildIfNeeded() {
             guard let p = parent, let outline else { return }
-            let sig = [p.root?.path ?? "<top>", p.favorites.map(\.path).joined(separator: "|"),
+            let sig = [p.root?.path ?? "<top>", p.favorites.map { "\($0.path)=\(p.favoriteNames[$0] ?? "")" }.joined(separator: "|"),
                        p.volumes.map { "\($0.url.path)#\($0.kind.rawValue)#\($0.name)" }.joined(separator: "|")]
                 .joined(separator: "\n")
             guard sig != signature else {
@@ -149,7 +152,7 @@ struct FolderOutlineView: NSViewRepresentable {
             let expanded = rootChanged ? [] : expandedKeys()
 
             if let root = p.root {
-                let rootItem = item(key: "root>\(root.path)", kind: .folder, url: root, title: FolderTree.displayName(root))
+                let rootItem = item(key: "root>\(root.path)", kind: .folder, url: root, title: root.lastPathComponent)
                 self.rootItem = rootItem
                 roots = rootItem.children ?? []
                 // 前に読んだ子があればまず表示し、読み直して変化があれば差し替える
@@ -158,7 +161,7 @@ struct FolderOutlineView: NSViewRepresentable {
                 rootItem = nil
                 var sections: [FolderItem] = []
                 let fav = item(key: "sec>fav", kind: .section("よく使う項目"), url: nil, title: "よく使う項目")
-                fav.children = p.favorites.map { folderItem($0, parentKey: "fav") }
+                fav.children = p.favorites.map { folderItem($0, parentKey: "fav", title: p.favoriteNames[$0]) }
                 sections.append(fav)
                 let grouped = Dictionary(grouping: p.volumes, by: \.kind)
                 for kind in grouped.keys.sorted() {
@@ -215,9 +218,11 @@ struct FolderOutlineView: NSViewRepresentable {
             item.isLoading = true
             let parentKey = item.key
             Task {
-                let urls = await Task.detached(priority: .userInitiated) { FolderScanner.subfolders(of: url) }.value
+                let entries = await Task.detached(priority: .userInitiated) {
+                    FolderScanner.subfolders(of: url).map { ($0, FolderTree.displayName($0)) }
+                }.value
                 item.isLoading = false
-                let newChildren = urls.map { self.folderItem($0, parentKey: parentKey) }
+                let newChildren = entries.map { self.folderItem($0.0, parentKey: parentKey, title: $0.1) }
                 let changed = item.children.map { $0.map(\.key) != newChildren.map(\.key) } ?? true
                 item.children = newChildren
                 guard let outline = self.outline else { return }

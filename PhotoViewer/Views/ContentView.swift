@@ -24,7 +24,8 @@ struct ContentView: View {
             // レイアウト更新が繰り返されて AppKit の例外でクラッシュするため使わない
             HSplitView {
                 // ZStack で包んで、フォルダの有無で中身が切り替わっても分割の位置が変わらないようにする
-                ZStack { gridArea }
+                // グリッドは独立した部品にして、選択が変わってもウインドウ全体（ツールバー・タイトル）を作り直さない
+                ZStack { GridArea() }
                     // 中央のグリッドはサムネイル 1 列分まで狭くできる（右列を広げてプレビューを大きく見るため）
                     .frame(minWidth: 120, maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
@@ -39,7 +40,11 @@ struct ContentView: View {
         .toolbar { toolbarContent }
         .background(ToolbarDisplayModeSetter())
         .searchable(text: $browser.filter.text, placement: .toolbar, prompt: "ファイル名・カメラ・レンズ")
-        .onAppear { browser.restoreLastFolder() }
+        .onAppear {
+            browser.restoreLastFolder()
+            // 計測用（PV_STRESS=1 のときだけ）：自動の負荷試験
+            StressTest.startIfRequested(browser: browser)
+        }
         .sheet(isPresented: Binding(
             get: { browser.renameTargets != nil },
             set: { if !$0 { browser.renameTargets = nil } }
@@ -61,51 +66,10 @@ struct ContentView: View {
     private var subtitle: String {
         guard browser.currentFolder != nil else { return "" }
         let n = browser.displayedItems.count
+        // 選択枚数はここに出さない（選択のたびにタイトルが変わり、ウインドウ全体が作り直されて重くなるため）
         var s = browser.filter.isFiltering ? "\(n) / \(browser.items.count) 枚" : "\(n) 枚"
-        if browser.selection.count > 1 { s += "（\(browser.selection.count) 枚選択）" }
         if let p = browser.metadataProgress { s += " ・撮影情報を読み込み中 \(p.done)/\(p.total)" }
         return s
-    }
-
-    @ViewBuilder
-    private var gridArea: some View {
-        if browser.currentFolder == nil {
-            ContentUnavailableView {
-                Label("フォルダを選択してください", systemImage: "photo.on.rectangle")
-            } description: {
-                Text("左のサイドバーからフォルダを選ぶか、⇧⌘O でフォルダを開きます。")
-            }
-        } else {
-            PhotoGridView(
-                items: browser.displayedItems,
-                selection: browser.selection,
-                layoutConfig: GridLayoutConfig(mode: gridMode, thumbnailSize: thumbnailSize,
-                                               columns: columns, showNames: showNames),
-                onSelectionChange: { browser.updateSelection($0, lastAdded: $1) },
-                onOpen: { settings.open($0) },
-                tagsFor: { browser.tags(for: $0) },
-                tagsVersion: browser.tagsVersion,
-                onRate: { browser.setRating($1, for: $0) },
-                onToggleDeveloped: { browser.toggleDeveloped(for: $0) },
-                onTrash: { browser.moveToTrash($0, undoManager: undoManager) },
-                contextMenu: { urls in
-                    GridContextMenu.make(for: urls, settings: settings,
-                                         onRename: { browser.renameTargets = urls },
-                                         onTrash: { browser.moveToTrash(urls, undoManager: undoManager) })
-                }
-            )
-            .overlay {
-                if browser.isScanning && browser.items.isEmpty {
-                    ProgressView()
-                } else if !browser.isScanning && browser.displayedItems.isEmpty {
-                    if browser.filter.isFiltering && !browser.items.isEmpty {
-                        ContentUnavailableView.search
-                    } else {
-                        Text("写真がありません").foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
     }
 
     @ToolbarContentBuilder
@@ -225,6 +189,58 @@ private struct ToolbarDisplayModeSetter: NSViewRepresentable {
         private func apply() {
             guard let toolbar = window?.toolbar, toolbar.displayMode != .iconAndLabel else { return }
             toolbar.displayMode = .iconAndLabel
+        }
+    }
+}
+
+/// 中央のサムネイルグリッド（選択・★・一覧の変化はここだけで受け取る）
+private struct GridArea: View {
+    @Environment(BrowserState.self) private var browser
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.undoManager) private var undoManager
+    @AppStorage(GridSettings.modeKey) private var gridMode: GridLayoutMode = .size
+    @AppStorage(GridSettings.thumbnailSizeKey) private var thumbnailSize = GridSettings.defaultSize
+    @AppStorage(GridSettings.columnsKey) private var columns = GridSettings.defaultColumns
+    @AppStorage(GridSettings.showNamesKey) private var showNames = true
+
+    var body: some View {
+        if browser.currentFolder == nil {
+            ContentUnavailableView {
+                Label("フォルダを選択してください", systemImage: "photo.on.rectangle")
+            } description: {
+                Text("左のサイドバーからフォルダを選ぶか、⇧⌘O でフォルダを開きます。")
+            }
+        } else {
+            PhotoGridView(
+                items: browser.displayedItems,
+                itemsVersion: browser.displayedVersion,
+                selection: browser.selection,
+                layoutConfig: GridLayoutConfig(mode: gridMode, thumbnailSize: thumbnailSize,
+                                               columns: columns, showNames: showNames),
+                onSelectionChange: { browser.updateSelection($0, lastAdded: $1) },
+                onOpen: { settings.open($0) },
+                tagsFor: { browser.tags(for: $0) },
+                tagsVersion: browser.tagsVersion,
+                onRate: { browser.setRating($1, for: $0) },
+                onToggleDeveloped: { browser.toggleDeveloped(for: $0) },
+                onTrash: { browser.moveToTrash($0, undoManager: undoManager) },
+                contextMenu: { urls in
+                    GridContextMenu.make(for: urls, settings: settings,
+                                         onRename: { browser.renameTargets = urls },
+                                         onTrash: { browser.moveToTrash(urls, undoManager: undoManager) })
+                }
+            )
+            .overlay {
+                if browser.isScanning && browser.items.isEmpty {
+                    ProgressView()
+                } else if !browser.isScanning && browser.displayedItems.isEmpty {
+                    if browser.filter.isFiltering && !browser.items.isEmpty {
+                        ContentUnavailableView.search
+                    } else {
+                        Text("写真がありません").foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 }

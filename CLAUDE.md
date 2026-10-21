@@ -40,6 +40,9 @@ open build/Build/Products/Debug/PhotoViewer.app
 - デスクトップ配下はアクセス許可（TCC）の対象。以前の ad-hoc 署名ではビルドのたびに許可ダイアログが出て読み込みが止まったため、テストデータはデスクトップの外に置いている。
 - 外付け HDD（/Volumes/LaCie_d2）の実写真は**読み取り専用**で性能確認に使う。レーティングやリネームなどの書き込みテストは必ず TestData で行う。
 - 性能計測：`PV_PERF=1 build/Build/Products/Debug/PhotoViewer.app/Contents/MacOS/PhotoViewer` で起動すると、最初のサムネイルが出るまでの時間を標準エラー出力に出す。
+- 止まりの調査：`PV_HANGCHECK=1` で起動すると、メインスレッドが 100ms 以上止まるたびに標準エラー出力に記録する（`PV_HANGCHECK_DIR=<フォルダ>` を付けると、そのときの呼び出し履歴を `sample` で保存する）。
+- 負荷試験：`PV_STRESS=1 PV_STRESS_FOLDERS=<フォルダ:フォルダ…>` で起動すると、スクロール・並べ替え・検索・絞り込み・右列の開閉・戻る/進むなどを自動で繰り返して終了する。★の連続書き込みは `PV_STRESS_WRITE=<TestData のフォルダ>` を指定したときだけ行う。設定（UserDefaults）を書き換えるので、事前に `defaults export com.geologycat.PhotoViewer` で控えて、終わったら戻す。
+- `contentsOfDirectory` などで得た URL は中身が NSURL のままで、辞書のキーや比較に使うと日本語のパスでは非常に遅い。`PhotoItem` は `swiftNative(isDirectory:)` で作り直した URL を持つ。
 
 ## 技術的な決定事項
 | 項目 | 決定 |

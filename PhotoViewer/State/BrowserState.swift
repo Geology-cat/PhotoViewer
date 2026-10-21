@@ -70,9 +70,12 @@ final class BrowserState {
 
     private static let lastFolderKey = "lastFolderPath"
 
+    /// URL → ファイル（プレビュー対象をすぐに引くため。items を入れ替えるたびに作り直す）
+    @ObservationIgnored private var itemsByURL: [URL: PhotoItem] = [:]
+
     var primaryItem: PhotoItem? {
         guard let primarySelection else { return nil }
-        return items.first { $0.url == primarySelection }
+        return itemsByURL[primarySelection]
     }
 
     /// 選択中のファイル（グリッドの表示順）
@@ -83,12 +86,16 @@ final class BrowserState {
     // MARK: - フォルダ
 
     /// 前回開いていたフォルダを開き直す
+    /// 存在の確認はバックグラウンドで行う（外付け HDD が止まっていると、確認だけで数秒かかることがある）
     func restoreLastFolder() {
         guard currentFolder == nil,
               let path = UserDefaults.standard.string(forKey: Self.lastFolderKey) else { return }
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
-            open(folder: URL(fileURLWithPath: path))
+        Task {
+            let exists = await Task.detached(priority: .userInitiated) {
+                var isDir: ObjCBool = false
+                return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+            }.value
+            if exists, self.currentFolder == nil { self.open(folder: URL(fileURLWithPath: path)) }
         }
     }
 
@@ -164,7 +171,9 @@ final class BrowserState {
         currentFolder = nil
         loadedFolder = nil
         items = []
+        itemsByURL = [:]
         displayedItems = []
+        displayedVersion &+= 1
         selection = []
         primarySelection = nil
         metadataCache = [:]
@@ -182,15 +191,20 @@ final class BrowserState {
         isScanning = true
         let recursive = includeSubfolders
         scanTask = Task {
-            var result = await Task.detached(priority: .userInitiated) {
-                FolderScanner.scan(folder, recursive: recursive)
+            // 走査と名前順の並べ替えはバックグラウンドで行う（数千件の並べ替えはメインスレッドでは重い）
+            let result = await Task.detached(priority: .userInitiated) {
+                var r = FolderScanner.scan(folder, recursive: recursive)
+                r.items.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                return r
             }.value
-            result.items.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             guard !Task.isCancelled, folder == self.currentFolder else { return }
             let isRefresh = self.loadedFolder == folder
             self.loadedFolder = folder
             // 中身が同じなら代入しない（不要な再描画を避ける）
-            if self.items != result.items { self.items = result.items }
+            if self.items != result.items {
+                self.items = result.items
+                self.itemsByURL = Dictionary(result.items.map { ($0.url, $0) }, uniquingKeysWith: { a, _ in a })
+            }
             self.sidecarIndex = result.sidecars
             // 別のフォルダを開いたときだけ消す（同じフォルダの読み直しでは★がちらつかないよう残す）
             if !isRefresh {
@@ -327,13 +341,19 @@ final class BrowserState {
 
     // MARK: - バッチリネーム
 
-    func makeRenamePlan(targets: [URL], options: RenameOptions) -> RenamePlan {
-        let dirs = Set(targets.map { $0.deletingLastPathComponent() })
-        var existing: [URL: Set<String>] = [:]
-        for d in dirs {
-            let names = (try? FileManager.default.contentsOfDirectory(atPath: d.path)) ?? []
-            existing[d] = Set(names.map { $0.lowercased() })
-        }
+    /// フォルダにあるファイル名（リネームの衝突確認用）。シートを開いたときに 1 回だけバックグラウンドで読む
+    nonisolated static func existingNames(for targets: [URL]) async -> [URL: Set<String>] {
+        await Task.detached(priority: .userInitiated) {
+            var existing: [URL: Set<String>] = [:]
+            for d in Set(targets.map { $0.deletingLastPathComponent() }) {
+                let names = (try? FileManager.default.contentsOfDirectory(atPath: d.path)) ?? []
+                existing[d] = Set(names.map { $0.lowercased() })
+            }
+            return existing
+        }.value
+    }
+
+    func makeRenamePlan(targets: [URL], options: RenameOptions, existingNames existing: [URL: Set<String>]) -> RenamePlan {
         let modDates = Dictionary(items.map { ($0.url, $0.modificationDate) }, uniquingKeysWith: { a, _ in a })
         return RenameService.plan(targets: targets, folderItems: items.map(\.url), sidecars: sidecarIndex,
                                   metadata: metadataCache, modificationDates: modDates,
@@ -431,10 +451,41 @@ final class BrowserState {
     }
 
     /// 表示用の一覧を作り直す
+    /// 一覧が変わるたびに増える（グリッドは、数千件の中身を比べる代わりにこの番号だけを比べる）
+    private(set) var displayedVersion = 0
+    @ObservationIgnored private var recomputeTask: Task<Void, Never>?
+    @ObservationIgnored private var recomputeGeneration = 0
+
+    /// 表示用の一覧を作り直す
+    /// 件数が多いときは、絞り込み・並べ替えをバックグラウンドで計算して、結果だけを反映する
+    /// （撮影情報を読みながら何度も作り直すため、メインスレッドで行うと画面が止まる）
     func recomputeDisplayed() {
-        let result = filter.apply(to: items, metadata: metadataCache) { self.tags(for: $0) }
-        if result.map(\.url) != displayedItems.map(\.url) {
+        recomputeGeneration &+= 1
+        let gen = recomputeGeneration
+        let filter = self.filter, items = self.items, metadata = self.metadataCache
+        // ★を使う条件のときだけ、今の★を写し取って渡す
+        let needsTags = filter.rating != .all || filter.developed != .all || filter.sortKey == .rating
+        let tagSnapshot: [URL: PhotoTags] = needsTags
+            ? Dictionary(items.map { ($0.url, tags(for: $0.url)) }, uniquingKeysWith: { a, _ in a }) : [:]
+        if items.count <= 500 {
+            applyDisplayed(filter.apply(to: items, metadata: metadata) { tagSnapshot[$0] ?? .empty })
+            return
+        }
+        recomputeTask?.cancel()
+        recomputeTask = Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                filter.apply(to: items, metadata: metadata) { tagSnapshot[$0] ?? .empty }
+            }.value
+            // 計算中に条件が変わっていたら、古い結果は使わない
+            guard gen == self.recomputeGeneration else { return }
+            self.applyDisplayed(result)
+        }
+    }
+
+    private func applyDisplayed(_ result: [PhotoItem]) {
+        if result.count != displayedItems.count || result.map(\.url) != displayedItems.map(\.url) {
             displayedItems = result
+            displayedVersion &+= 1
         }
         // 非表示になったファイルは選択から外す（見えないファイルにレーティングを付けないため）
         if filter.isFiltering {
@@ -485,7 +536,9 @@ final class BrowserState {
 
     /// 実際に使うサイドカーの場所（大文字の .XMP などが既にあればそれを使う）
     func sidecarURL(for url: URL) -> URL {
-        sidecarIndex[FolderScanner.sidecarKey(url)] ?? url.deletingPathExtension().appendingPathExtension("xmp")
+        // 一覧にあるファイルは、最初に求めておいた値を使う（毎回パスの文字列を作らない）
+        if let item = itemsByURL[url] { return sidecarIndex[item.sidecarKey] ?? item.sidecarURL }
+        return sidecarIndex[FolderScanner.sidecarKey(url)] ?? url.deletingPathExtension().appendingPathExtension("xmp")
     }
 
     /// 表示用のレーティング・現像済み。サイドカーがなければファイル内の XMP のレーティングを使う

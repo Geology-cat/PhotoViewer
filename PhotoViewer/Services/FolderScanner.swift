@@ -24,9 +24,11 @@ enum FolderScanner {
         var dates: [URL: Date] = [:]
         let items = scanPhotos(in: folder, recursive: recursive) { u in
             if u.pathExtension.lowercased() == "xmp" {
-                sidecars[sidecarKey(u)] = u
-                dates[u] = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-                    ?? .distantPast
+                // 更新日は列挙時に読み込み済みの元の URL から取り、キーには作り直した URL を使う
+                let date = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                let native = u.swiftNative(isDirectory: false)
+                sidecars[sidecarKey(native)] = native
+                dates[native] = date ?? .distantPast
             }
         }
         return ScanResult(items: items, sidecars: sidecars, sidecarDates: dates)

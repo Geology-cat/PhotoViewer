@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// サイドバーの表示方式
 enum SidebarStyle: String, CaseIterable, Identifiable {
@@ -53,6 +54,9 @@ private struct FolderListView: View {
     /// ツリーの起点にしているフォルダのパス（空 = 最上位の「よく使う項目」・ボリューム）
     @AppStorage("sidebar.listRoot") private var rootPath = ""
     @State private var rootVolume: VolumeInfo?
+    /// 見出しに出す起点の名前と親フォルダの一覧（表示名の取得はディスクに触るので、バックグラウンドで用意する）
+    @State private var rootTitle = ""
+    @State private var ancestorItems: [(url: URL, name: String)] = []
     @State private var ejectError: String?
 
     private var rootURL: URL? {
@@ -86,6 +90,7 @@ private struct FolderListView: View {
             FolderOutlineView(
                 root: rootURL,
                 favorites: tree.favorites,
+                favoriteNames: tree.favoriteNames,
                 volumes: tree.volumes,
                 currentFolder: browser.currentFolder,
                 onSelect: { browser.open(folder: $0) },
@@ -94,7 +99,7 @@ private struct FolderListView: View {
                 onEject: { eject($0) }
             )
         }
-        .task(id: rootPath) { checkRoot() }
+        .task(id: rootPath) { await checkRoot() }
         // 一覧に戻った・タブを切り替えたなど、起点だけが変わったときも履歴に残す
         .onChange(of: rootPath) { _, _ in browser.recordLocation() }
         .alert("取り出せませんでした", isPresented: Binding(
@@ -135,7 +140,7 @@ private struct FolderListView: View {
 
                 // フォルダ名は長くても省略表示にして、サイドバーの最小幅を変えない
                 // （名前の長さで最小幅が変わると、分割ビューのレイアウト更新が繰り返されてクラッシュする）
-                Text(FolderTree.displayName(root))
+                Text(rootTitle.isEmpty ? root.lastPathComponent : rootTitle)
                     .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -144,11 +149,12 @@ private struct FolderListView: View {
 
                 Menu {
                     // 親フォルダをたどって移動できる（Finder のタイトルの右クリックと同じ）
-                    ForEach(ancestors(of: root), id: \.self) { url in
+                    ForEach(ancestorItems, id: \.url) { entry in
+                        let url = entry.url
                         Button {
                             enter(url)
                         } label: {
-                            Label(FolderTree.displayName(url),
+                            Label(entry.name,
                                   systemImage: url.path == "/" ? "internaldrive" : "folder")
                         }
                     }
@@ -229,36 +235,55 @@ private struct FolderListView: View {
     private func selectDriveTab(_ v: VolumeInfo) {
         let isActive = !rootPath.isEmpty && rootVolume?.url.standardizedFileURL == v.url.standardizedFileURL
         rememberCurrentRoot()
-        var target = v.url
-        if !isActive, let saved = savedRoot(for: v.url) {
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: saved, isDirectory: &isDir), isDir.boolValue {
-                target = URL(fileURLWithPath: saved, isDirectory: true)
-            }
+        guard !isActive, let saved = savedRoot(for: v.url) else {
+            enter(v.url)
+            return
         }
-        enter(target)
+        // 前回の場所が残っているかの確認はバックグラウンドで（ドライブが止まっていると時間がかかるため）
+        Task {
+            let exists = await Task.detached(priority: .userInitiated) {
+                var isDir: ObjCBool = false
+                return FileManager.default.fileExists(atPath: saved, isDirectory: &isDir) && isDir.boolValue
+            }.value
+            enter(exists ? URL(fileURLWithPath: saved, isDirectory: true) : v.url)
+        }
     }
 
     private func goUp(from root: URL) {
-        SidebarNavigation.goUp(rootPath: &rootPath, browser: browser)
+        SidebarNavigation.goUp(rootPath: &rootPath, browser: browser, volumes: tree.volumes)
     }
 
-    private func ancestors(of url: URL) -> [URL] {
-        SidebarNavigation.ancestors(of: url)
-    }
-
-    private func checkRoot() {
+    /// 起点の確認・名前・親フォルダ・ドライブの情報をバックグラウンドで用意する
+    private func checkRoot() async {
         guard let root = rootURL else {
             rootVolume = nil
+            rootTitle = ""
+            ancestorItems = []
             return
         }
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
+        struct Info: Sendable {
+            var exists: Bool
+            var title: String
+            var ancestors: [(url: URL, name: String)]
+            var volume: VolumeInfo?
+        }
+        let info = await Task.detached(priority: .userInitiated) { () -> Info in
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir) && isDir.boolValue
+            guard exists else { return Info(exists: false, title: "", ancestors: [], volume: nil) }
+            return Info(exists: true, title: FolderTree.displayName(root),
+                        ancestors: SidebarNavigation.ancestors(of: root).map { ($0, FolderTree.displayName($0)) },
+                        volume: VolumeInfo.containing(root))
+        }.value
+        guard !Task.isCancelled, rootURL == root else { return }
+        guard info.exists else {
             // フォルダが消えた・ドライブが外されたときは最上位に戻る
             rootPath = ""
             return
         }
-        rootVolume = VolumeInfo.containing(root)
+        rootTitle = info.title
+        ancestorItems = info.ancestors
+        rootVolume = info.volume
     }
 }
 
@@ -284,11 +309,12 @@ enum SidebarNavigation {
 
     /// リスト表示の起点を 1 つ上の階層にする
     /// 外付け・ディスクイメージなどのドライブの一番上からは /Volumes に行かず、よく使う項目・ドライブの一覧に戻る
-    static func goUp(rootPath: inout String, browser: BrowserState) {
+    /// - Parameter volumes: マウント中のドライブ（ディスクに触らずに「ドライブの一番上か」を判定するため）
+    static func goUp(rootPath: inout String, browser: BrowserState, volumes: [VolumeInfo]) {
         guard !rootPath.isEmpty else { return }
         let root = URL(fileURLWithPath: rootPath, isDirectory: true)
-        if let v = VolumeInfo.containing(root), v.kind != .internal,
-           v.url.standardizedFileURL.path == root.standardizedFileURL.path {
+        let rootStd = root.standardizedFileURL.path
+        if volumes.contains(where: { $0.kind != .internal && $0.url.standardizedFileURL.path == rootStd }) {
             rootPath = ""
             return
         }
@@ -402,7 +428,7 @@ private struct FolderIconView: View {
                 }
                 .disabled(location == nil)
                 .help("上のフォルダへ")
-                Text(location.map { FileManager.default.displayName(atPath: $0.path) } ?? "場所")
+                Text(location.map(\.lastPathComponent) ?? "場所")
                     .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -415,7 +441,7 @@ private struct FolderIconView: View {
                 LazyVGrid(columns: columns, spacing: 8) {
                     if location == nil {
                         ForEach(tree.favorites, id: \.self) { url in
-                            FolderIconCell(url: url, name: FolderTree.displayName(url),
+                            FolderIconCell(url: url, name: url.lastPathComponent,
                                            isSelected: browser.currentFolder == url,
                                            onSelect: { browser.open(folder: url) },
                                            onEnter: { location = url })
@@ -469,7 +495,9 @@ private struct FolderIconCell: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+            // ファイルごとにアイコンを読みに行くとディスクに触るので、共通のアイコンを使う
+            Image(nsImage: volumeKind.map { _ in NSWorkspace.shared.icon(for: .volume) }
+                  ?? NSWorkspace.shared.icon(for: .folder))
                 .resizable()
                 .frame(width: 48, height: 48)
                 .overlay(alignment: .bottomTrailing) {

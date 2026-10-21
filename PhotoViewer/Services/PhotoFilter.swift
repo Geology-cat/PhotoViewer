@@ -117,7 +117,7 @@ struct PhotoFilter: Equatable, Sendable {
     ///   - tags: レーティング・現像済みの取得
     func apply(to items: [PhotoItem], metadata: [URL: PhotoMetadata],
                tags: (URL) -> PhotoTags) -> [PhotoItem] {
-        let words = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        let words = text.split(whereSeparator: \.isWhitespace).map { $0.lowercased() }
         let needsMeta = usesExifConditions
         let calendar = Calendar.current
         let endOfDateTo = dateTo.flatMap { calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: $0)) }
@@ -127,9 +127,12 @@ struct PhotoFilter: Equatable, Sendable {
             if !extensions.isEmpty && !extensions.contains(item.ext) { return false }
             let meta = metadata[item.url]
             if !words.isEmpty {
-                let haystacks = [item.name, meta?.cameraName, meta?.lensModel].compactMap { $0 }
-                for w in words where !haystacks.contains(where: { $0.localizedCaseInsensitiveContains(w) }) {
-                    return false
+                // ファイル名は小文字にしたものを最初に用意してあるので速い。カメラ・レンズは撮影情報があるときだけ
+                for w in words where !item.lowerName.contains(w) {
+                    let inMeta = meta.map { m in
+                        (m.cameraName?.lowercased().contains(w) ?? false) || (m.lensModel?.lowercased().contains(w) ?? false)
+                    } ?? false
+                    if !inMeta { return false }
                 }
             }
             if rating != .all || developed != .all {

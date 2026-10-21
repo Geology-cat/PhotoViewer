@@ -18,6 +18,7 @@ struct RenameSheet: View {
     @State private var plan: RenamePlan?
     @State private var isLoadingMetadata = true
     @State private var isRunning = false
+    @State private var existingNames: [URL: Set<String>] = [:]
 
     private var options: RenameOptions {
         RenameOptions(template: template, startNumber: startNumber, digits: digits, dateFormat: dateFormat,
@@ -49,6 +50,7 @@ struct RenameSheet: View {
         .frame(width: 720, height: 620)
         .task {
             await browser.ensureMetadata(targets)
+            existingNames = await BrowserState.existingNames(for: targets)
             isLoadingMetadata = false
             recompute()
         }
@@ -163,7 +165,7 @@ struct RenameSheet: View {
 
     private func recompute() {
         guard !isLoadingMetadata else { return }
-        plan = browser.makeRenamePlan(targets: targets, options: options)
+        plan = browser.makeRenamePlan(targets: targets, options: options, existingNames: existingNames)
     }
 
     private func run() {

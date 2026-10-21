@@ -13,6 +13,8 @@ struct GridLayoutConfig: Equatable {
 /// サムネイルグリッド（NSCollectionView をラップ）
 struct PhotoGridView: NSViewRepresentable {
     var items: [PhotoItem]
+    /// 一覧が変わるたびに増える番号（数千件の中身を毎回比べないため）
+    var itemsVersion: Int
     var selection: Set<URL>
     var layoutConfig: GridLayoutConfig
     var onSelectionChange: (Set<URL>, URL?) -> Void
@@ -45,7 +47,7 @@ struct PhotoGridView: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.collectionView = cv
         coordinator.layout = layout
-        coordinator.dataSource = NSCollectionViewDiffableDataSource<Int, URL>(collectionView: cv) {
+        coordinator.dataSource = GridDataSource(collectionView: cv) {
             [weak coordinator] collectionView, indexPath, url in
             let item = collectionView.makeItem(withIdentifier: PhotoGridItem.identifier, for: indexPath)
             if let cell = item as? PhotoGridItem, let coordinator, let photo = coordinator.itemsByURL[url] {
@@ -88,17 +90,20 @@ struct PhotoGridView: NSViewRepresentable {
             c.refreshVisibleIfPixelSizeChanged(force: namesChanged)
         }
 
-        // ファイル一覧の変更
-        let ids = items.map(\.url)
+        // ファイル一覧の変更（番号が変わったときだけ中身を見る）
+        if itemsVersion != c.currentVersion {
+            c.currentVersion = itemsVersion
+        }
+        let ids = c.currentVersion == c.appliedVersion ? c.currentIDs : items.map(\.url)
+        if c.currentVersion != c.appliedVersion {
+            c.appliedVersion = c.currentVersion
+        }
         if ids != c.currentIDs {
             let folderChanged = items.first?.url.deletingLastPathComponent()
                 != c.currentIDs.first?.deletingLastPathComponent()
             c.itemsByURL = Dictionary(items.map { ($0.url, $0) }, uniquingKeysWith: { a, _ in a })
             c.currentIDs = ids
-            var snapshot = NSDiffableDataSourceSnapshot<Int, URL>()
-            snapshot.appendSections([0])
-            snapshot.appendItems(ids, toSection: 0)
-            ds.apply(snapshot, animatingDifferences: false)
+            ds.apply(ids)
             if folderChanged {
                 cv.scroll(.zero)
             }
@@ -126,9 +131,11 @@ struct PhotoGridView: NSViewRepresentable {
         var parent: PhotoGridView?
         weak var collectionView: PhotoCollectionView?
         var layout: GridLayout?
-        var dataSource: NSCollectionViewDiffableDataSource<Int, URL>?
+        var dataSource: GridDataSource?
         var itemsByURL: [URL: PhotoItem] = [:]
         var currentIDs: [URL] = []
+        var currentVersion = -1
+        var appliedVersion = -2
         var isApplyingSelection = false
         var lastTagsVersion = -1
         private var lastPixelBucket = 0
@@ -176,6 +183,50 @@ struct PhotoGridView: NSViewRepresentable {
         func collectionView(_ collectionView: NSCollectionView, didDeselectItemsAt indexPaths: Set<IndexPath>) {
             notifySelection(lastAddedPaths: [])
         }
+    }
+}
+
+/// グリッドのデータソース
+/// 差分を計算して 1 件ずつ移動させる方式（NSCollectionViewDiffableDataSource）は、
+/// 数千件の並べ替え・絞り込みのたびに重くなるため、一覧が変わったら丸ごと読み直す方式にした
+@MainActor
+final class GridDataSource: NSObject, NSCollectionViewDataSource {
+    typealias CellProvider = (NSCollectionView, IndexPath, URL) -> NSCollectionViewItem
+    private weak var collectionView: NSCollectionView?
+    private let cellProvider: CellProvider
+    private var ids: [URL] = []
+    private var indexByURL: [URL: Int] = [:]
+
+    init(collectionView: NSCollectionView, cellProvider: @escaping CellProvider) {
+        self.collectionView = collectionView
+        self.cellProvider = cellProvider
+        super.init()
+        collectionView.dataSource = self
+    }
+
+    func apply(_ newIDs: [URL]) {
+        ids = newIDs
+        indexByURL = Dictionary(newIDs.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        collectionView?.reloadData()
+    }
+
+    func itemIdentifier(for indexPath: IndexPath) -> URL? {
+        ids.indices.contains(indexPath.item) ? ids[indexPath.item] : nil
+    }
+
+    func indexPath(for url: URL) -> IndexPath? {
+        indexByURL[url].map { IndexPath(item: $0, section: 0) }
+    }
+
+    func numberOfSections(in collectionView: NSCollectionView) -> Int { 1 }
+
+    func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
+        ids.count
+    }
+
+    func collectionView(_ collectionView: NSCollectionView,
+                        itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
+        cellProvider(collectionView, indexPath, ids[indexPath.item])
     }
 }
 

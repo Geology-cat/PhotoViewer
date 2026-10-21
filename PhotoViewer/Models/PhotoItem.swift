@@ -9,13 +9,25 @@ struct PhotoItem: Identifiable, Hashable, Sendable {
     let name: String
     /// 小文字の拡張子
     let ext: String
+    /// 検索用の小文字のファイル名
+    let lowerName: String
+    /// 拡張子を除いたパス（小文字）。同名の RAW と JPEG で共有するサイドカーを探すのに使う
+    let sidecarKey: String
+    /// レーティング等を保存する XMP サイドカーの既定の場所（同名の RAW と JPEG で共有）
+    let sidecarURL: URL
 
+    /// よく使う値はここで一度だけ求める（フォルダの走査はバックグラウンドで行うので、画面の操作を止めない）
     init(url: URL, fileSize: Int64, modificationDate: Date) {
+        let url = url.swiftNative(isDirectory: false)
         self.url = url
         self.fileSize = fileSize
         self.modificationDate = modificationDate
         self.name = url.lastPathComponent
         self.ext = url.pathExtension.lowercased()
+        self.lowerName = name.lowercased()
+        let base = url.deletingPathExtension()
+        self.sidecarKey = base.path.lowercased()
+        self.sidecarURL = base.appendingPathExtension("xmp")
     }
 
     var id: URL { url }
@@ -35,11 +47,18 @@ struct PhotoItem: Identifiable, Hashable, Sendable {
         default: return isVideo ? 6 : 5
         }
     }
-    /// レーティング等を保存する XMP サイドカーの場所（同名の RAW と JPEG で共有）
-    var sidecarURL: URL { url.deletingPathExtension().appendingPathExtension("xmp") }
 }
 
 /// 対応する拡張子
+extension URL {
+    /// Swift 側で作り直した同じ URL
+    /// フォルダの列挙で得た URL は中身が NSURL のままで、辞書のキーにしたり比べたりするたびに文字列の変換が走る。
+    /// 日本語を含むパスでは数千件の辞書を作るだけで数十 ms かかり、並べ替えのたびに画面が一瞬止まる原因になっていた
+    func swiftNative(isDirectory: Bool) -> URL {
+        URL(fileURLWithPath: String(decoding: Array(path.utf8), as: UTF8.self), isDirectory: isDirectory)
+    }
+}
+
 enum SupportedFormats {
     static let raw: Set<String> = [
         "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "pef",

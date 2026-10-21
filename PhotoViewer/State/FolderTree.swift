@@ -106,6 +106,8 @@ struct VolumeInfo: Hashable, Sendable {
 @Observable
 final class FolderTree {
     private(set) var favorites: [URL] = []
+    /// よく使う項目の表示名（ピクチャ・デスクトップなど。取得はディスクに触るのでバックグラウンドで用意する）
+    private(set) var favoriteNames: [URL: String] = [:]
     private(set) var volumes: [VolumeInfo] = []
 
     private static let favoritesKey = "sidebar.favorites"
@@ -116,7 +118,7 @@ final class FolderTree {
         observeVolumeChanges()
     }
 
-    static func displayName(_ url: URL) -> String {
+    nonisolated static func displayName(_ url: URL) -> String {
         FileManager.default.displayName(atPath: url.path)
     }
 
@@ -132,9 +134,25 @@ final class FolderTree {
                 fm.homeDirectoryForCurrentUser,
             ].compactMap { $0?.path }
         }
-        favorites = paths
-            .filter { FileManager.default.fileExists(atPath: $0) }
-            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        // まずはそのまま表示し、存在の確認と表示名の取得はバックグラウンドで行う
+        // （外付け HDD のフォルダを登録していると、HDD が止まっているときに起動が数秒止まるため）
+        let urls = paths.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        favorites = urls
+        Task {
+            let checked = await Task.detached(priority: .utility) { () -> [(URL, String)] in
+                urls.filter { FileManager.default.fileExists(atPath: $0.path) }.map { ($0, Self.displayName($0)) }
+            }.value
+            let existing = Set(checked.map(\.0))
+            self.favorites = self.favorites.filter { existing.contains($0) || !urls.contains($0) }
+            for (u, name) in checked { self.favoriteNames[u] = name }
+        }
+    }
+
+    private func loadFavoriteName(_ url: URL) {
+        Task {
+            let name = await Task.detached(priority: .utility) { Self.displayName(url) }.value
+            self.favoriteNames[url] = name
+        }
     }
 
     private func saveFavorites() {
@@ -148,6 +166,7 @@ final class FolderTree {
     func addFavorite(_ url: URL) {
         guard !isFavorite(url) else { return }
         favorites.append(url.standardizedFileURL)
+        loadFavoriteName(url.standardizedFileURL)
         saveFavorites()
     }
 
@@ -156,16 +175,23 @@ final class FolderTree {
         saveFavorites()
     }
 
+    /// ドライブの一覧と空き容量・種類をバックグラウンドで読む
+    /// （応答しないネットワークドライブや止まっている HDD に触ると、数秒〜数十秒かかることがあるため）
     func reloadVolumes() {
-        let keys: [URLResourceKey] = [.volumeNameKey, .volumeIsBrowsableKey]
-        let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys,
-                                                         options: [.skipHiddenVolumes]) ?? []
-        volumes = urls.compactMap { u in
-            let v = try? u.resourceValues(forKeys: Set(keys))
-            guard v?.volumeIsBrowsable != false else { return nil }
-            return VolumeInfo.load(u, name: v?.volumeName)
+        Task {
+            let loaded = await Task.detached(priority: .utility) { () -> [VolumeInfo] in
+                let keys: [URLResourceKey] = [.volumeNameKey, .volumeIsBrowsableKey]
+                let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys,
+                                                                 options: [.skipHiddenVolumes]) ?? []
+                return urls.compactMap { u in
+                    let v = try? u.resourceValues(forKeys: Set(keys))
+                    guard v?.volumeIsBrowsable != false else { return nil }
+                    return VolumeInfo.load(u, name: v?.volumeName)
+                }
+                .sorted { ($0.kind, $0.name) < ($1.kind, $1.name) }
+            }.value
+            if loaded != self.volumes { self.volumes = loaded }
         }
-        .sorted { ($0.kind, $0.name) < ($1.kind, $1.name) }
     }
 
     /// 取り出す（時間がかかることがあるのでバックグラウンドで行う）。失敗したら理由を返す
