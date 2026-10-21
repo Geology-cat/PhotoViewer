@@ -40,11 +40,12 @@ enum TriState: String, CaseIterable, Identifiable, Sendable {
 }
 
 enum SortKey: String, CaseIterable, Identifiable, Sendable {
-    case name, captureDate, modificationDate, rating, fileSize
+    case name, kind, captureDate, modificationDate, rating, fileSize
     var id: String { rawValue }
     var label: String {
         switch self {
         case .name: "ファイル名"
+        case .kind: "種類"
         case .captureDate: "撮影日"
         case .modificationDate: "更新日"
         case .rating: "レーティング"
@@ -193,6 +194,13 @@ struct PhotoFilter: Equatable, Sendable {
         case .fileSize:
             result = indexed.sorted { a, b in
                 let ka = a.element.fileSize, kb = b.element.fileSize
+                if ka == kb { return a.offset < b.offset }
+                return ascending ? ka < kb : ka > kb
+            }
+        case .kind:
+            // 種類の順（RAW → JPEG → HEIC → TIF → PNG → その他 → 動画）、同じ種類なら拡張子、その次はファイル名
+            result = indexed.sorted { a, b in
+                let ka = (a.element.kindRank, a.element.ext), kb = (b.element.kindRank, b.element.ext)
                 if ka == kb { return a.offset < b.offset }
                 return ascending ? ka < kb : ka > kb
             }

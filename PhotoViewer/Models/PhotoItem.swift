@@ -23,6 +23,18 @@ struct PhotoItem: Identifiable, Hashable, Sendable {
     var baseName: String { url.deletingPathExtension().lastPathComponent }
     var isRAW: Bool { SupportedFormats.raw.contains(ext) }
     var isVideo: Bool { SupportedFormats.video.contains(ext) }
+
+    /// 「種類」で並べ替えるときの順位（RAW → JPEG → HEIC → TIF → PNG → その他の画像 → 動画）
+    var kindRank: Int {
+        if isRAW { return 0 }
+        switch ext {
+        case "jpg", "jpeg": return 1
+        case "heic", "heif", "hif": return 2
+        case "tif", "tiff": return 3
+        case "png": return 4
+        default: return isVideo ? 6 : 5
+        }
+    }
     /// レーティング等を保存する XMP サイドカーの場所（同名の RAW と JPEG で共有）
     var sidecarURL: URL { url.deletingPathExtension().appendingPathExtension("xmp") }
 }

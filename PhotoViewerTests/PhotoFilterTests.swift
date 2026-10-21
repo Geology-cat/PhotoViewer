@@ -145,4 +145,15 @@ struct PhotoFilterTests {
         #expect(ExposureParser.seconds(from: "1/0") == nil)
         #expect(ExposureParser.seconds(from: "") == nil)
     }
+
+    @Test func 種類で並べ替え() {
+        let list = [item("b.mov"), item("a.JPG"), item("c.tif"), item("z.CR3"), item("y.heic"), item("x.png"),
+                    item("w.NEF"), item("v.gif")]
+        var f = PhotoFilter()
+        f.sortKey = .kind
+        let names = f.apply(to: list, metadata: [:]) { _ in .empty }.map(\.name)
+        #expect(names == ["z.CR3", "w.NEF", "a.JPG", "y.heic", "c.tif", "x.png", "v.gif", "b.mov"])
+        f.ascending = false
+        #expect(f.apply(to: list, metadata: [:]) { _ in .empty }.first?.name == "b.mov")
+    }
 }
