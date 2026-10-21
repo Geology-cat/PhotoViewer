@@ -11,13 +11,18 @@ struct ContentView: View {
     @AppStorage(GridSettings.columnsKey) private var columns = GridSettings.defaultColumns
     @AppStorage(GridSettings.showNamesKey) private var showNames = true
     @State private var showFilter = false
+    /// サイドバーの表示状態（アプリを終了しても覚えておく）
+    @SceneStorage("sidebar.visible") private var showSidebar = true
     @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         @Bindable var browser = browser
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: sidebarVisibility) {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 180, ideal: 230, max: 600)
+                // OS 標準の切り替えボタンはサイドバー側のツールバーにあり、サイドバーを閉じると一緒に隠れてしまうため、
+                // 代わりにグリッド側のツールバーに常に表示されるボタンを置く
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             // 右列（プレビュー＋情報）は分割ビューで並べる
             // SwiftUI 標準の .inspector は、ウインドウに収まらないほど広げられる設定にすると
@@ -63,6 +68,14 @@ struct ContentView: View {
         }
     }
 
+    /// サイドバーの開閉（メニューの「サイドバーを表示／非表示」や境界のドラッグで閉じた場合もここに反映される）
+    private var sidebarVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { showSidebar ? .all : .detailOnly },
+            set: { showSidebar = $0 != .detailOnly }
+        )
+    }
+
     private var subtitle: String {
         guard browser.currentFolder != nil else { return "" }
         let n = browser.displayedItems.count
@@ -75,6 +88,12 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
+            Button {
+                withAnimation { showSidebar.toggle() }
+            } label: {
+                Label("サイドバー", systemImage: "sidebar.left")
+            }
+            .help("サイドバーの表示／非表示（⌃⌘S）")
             Button {
                 browser.goBack()
             } label: {
