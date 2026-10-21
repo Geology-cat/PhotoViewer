@@ -31,6 +31,14 @@ final class BrowserState {
     /// 書き込みエラーなど、ユーザーに知らせるメッセージ
     var alertMessage: String?
 
+    /// プレビューの回転（度。90 の倍数）。表示だけを回し、ファイルは書き換えない（アプリを終了するまで覚えておく）
+    /// 360 で割らずに積み重ねるのは、押した向きにだけ 90° 回るアニメーションにするため
+    private(set) var previewRotation: [URL: Int] = [:]
+
+    func rotatePreview(_ url: URL, by degrees: Int) {
+        previewRotation[url] = (previewRotation[url] ?? 0) + degrees
+    }
+
     /// バッチリネームの対象（nil でなければシートを表示する）
     var renameTargets: [URL]?
 

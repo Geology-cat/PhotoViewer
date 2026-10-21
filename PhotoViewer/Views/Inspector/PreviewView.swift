@@ -3,6 +3,7 @@ import SwiftUI
 
 /// 右上：選択中の画像のプレビュー
 struct PreviewView: View {
+    @Environment(BrowserState.self) private var browser
     let item: PhotoItem?
     let selectionCount: Int
     @Environment(\.displayScale) private var displayScale
@@ -14,11 +15,15 @@ struct PreviewView: View {
         GeometryReader { geo in
             let pixel = ThumbnailLoader.bucket(for: Int(max(geo.size.width, geo.size.height) * displayScale))
             ZStack {
-                if let image, loadedURL == item?.url {
+                if let image, let url = item?.url, loadedURL == url {
+                    let rotation = browser.previewRotation[url] ?? 0
+                    let size = Self.fittedSize(image.size, rotation: rotation, in: geo.size)
                     Image(nsImage: image)
                         .resizable()
                         .interpolation(.high)
-                        .scaledToFit()
+                        .frame(width: size.width, height: size.height)
+                        .rotationEffect(.degrees(Double(rotation)))
+                        .animation(.easeInOut(duration: 0.2), value: rotation)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if item == nil {
                     Text(selectionCount > 1 ? "\(selectionCount) 件を選択中" : "画像を選択してください")
@@ -29,6 +34,11 @@ struct PreviewView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .bottomTrailing) {
+                if let url = item?.url {
+                    RotateButtons(url: url)
+                }
+            }
             .task(id: PreviewKey(url: item?.url, pixel: pixel)) {
                 await load(url: item?.url, pixel: pixel)
             }
@@ -62,6 +72,16 @@ struct PreviewView: View {
         loadedURL = url
     }
 
+    /// 回転後に枠へ収まる大きさ（回転前の向きでの幅・高さを返す）
+    static func fittedSize(_ image: CGSize, rotation: Int, in box: CGSize) -> CGSize {
+        guard image.width > 0, image.height > 0, box.width > 0, box.height > 0 else { return .zero }
+        let quarter = abs(rotation / 90) % 2 == 1
+        let w = quarter ? image.height : image.width
+        let h = quarter ? image.width : image.height
+        let scale = min(box.width / w, box.height / h)
+        return CGSize(width: image.width * scale, height: image.height * scale)
+    }
+
     nonisolated private static func loadPreview(_ url: URL, pixel: Int) async -> CGImage? {
         if Task.isCancelled { return nil }
         return ThumbnailLoader.shared.load(url, pixelSize: pixel, allowFullDecode: true)
@@ -71,4 +91,31 @@ struct PreviewView: View {
 private struct PreviewKey: Hashable {
     var url: URL?
     var pixel: Int
+}
+
+/// プレビュー右下の「左に 90° 回転」「右に 90° 回転」ボタン
+private struct RotateButtons: View {
+    @Environment(BrowserState.self) private var browser
+    let url: URL
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button {
+                browser.rotatePreview(url, by: -90)
+            } label: {
+                Image(systemName: "rotate.left").frame(width: 24, height: 20)
+            }
+            .help("左に 90° 回転（⌥⌘←）")
+            Button {
+                browser.rotatePreview(url, by: 90)
+            } label: {
+                Image(systemName: "rotate.right").frame(width: 24, height: 20)
+            }
+            .help("右に 90° 回転（⌥⌘→）")
+        }
+        .buttonStyle(.borderless)
+        .padding(4)
+        .background(.regularMaterial, in: Capsule())
+        .padding(6)
+    }
 }

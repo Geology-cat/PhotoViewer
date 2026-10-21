@@ -41,6 +41,17 @@ struct PhotoViewerApp: App {
                 Button("現像済みを切り替え") { browser.toggleDeveloped(for: targets) }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                 Divider()
+                Button("プレビューを左に 90° 回転") {
+                    if let u = browser.primarySelection { browser.rotatePreview(u, by: -90) }
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                .disabled(browser.primarySelection == nil)
+                Button("プレビューを右に 90° 回転") {
+                    if let u = browser.primarySelection { browser.rotatePreview(u, by: 90) }
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                .disabled(browser.primarySelection == nil)
+                Divider()
                 Button("名前を一括変更…") { browser.renameTargets = targets }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(targets.isEmpty)

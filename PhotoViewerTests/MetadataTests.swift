@@ -148,3 +148,26 @@ struct SidebarNavigationTests {
         #expect(result.count < 64)
     }
 }
+
+struct PreviewRotationTests {
+    @Test @MainActor func 回転後も枠に収まる() {
+        let box = CGSize(width: 400, height: 300)
+        // 横長 3:2 をそのまま
+        #expect(PreviewView.fittedSize(CGSize(width: 1500, height: 1000), rotation: 0, in: box) == CGSize(width: 400, height: 400.0 * 1000 / 1500))
+        // 90° 回すと縦長になるので高さ 300 に合わせる（回転前の幅が 300）
+        let r = PreviewView.fittedSize(CGSize(width: 1500, height: 1000), rotation: 90, in: box)
+        #expect(abs(r.width - 300) < 0.001)
+        #expect(abs(r.height - 200) < 0.001)
+        #expect(PreviewView.fittedSize(.zero, rotation: 90, in: box) == .zero)
+    }
+}
+
+extension PreviewRotationTests {
+    @Test @MainActor func 左回りの角度でも縦横を入れ替える() {
+        let box = CGSize(width: 400, height: 300)
+        #expect(PreviewView.fittedSize(CGSize(width: 1500, height: 1000), rotation: -90, in: box)
+            == PreviewView.fittedSize(CGSize(width: 1500, height: 1000), rotation: 270, in: box))
+        #expect(PreviewView.fittedSize(CGSize(width: 1500, height: 1000), rotation: -180, in: box)
+            == PreviewView.fittedSize(CGSize(width: 1500, height: 1000), rotation: 0, in: box))
+    }
+}
