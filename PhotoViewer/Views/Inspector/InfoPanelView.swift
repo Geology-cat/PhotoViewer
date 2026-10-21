@@ -51,7 +51,21 @@ struct InfoPanelView: View {
         browser.selection.count > 1 ? browser.selectedURLsInDisplayOrder : [primary.url]
     }
 
+    @ViewBuilder
     private func shootingSection(_ m: PhotoMetadata) -> some View {
+        if let duration = m.duration {
+            SectionBox(title: "動画") {
+                InfoRow(label: "撮影日", value: m.captureDate.map { ExifFormat.dateFormatter.string(from: $0) })
+                InfoRow(label: "長さ", value: ExifFormat.duration(duration))
+                InfoRow(label: "フレーム", value: m.frameRate.map { String(format: "%.2f fps", $0) })
+                InfoRow(label: "カメラ", value: m.cameraName)
+            }
+        } else {
+            photoShootingSection(m)
+        }
+    }
+
+    private func photoShootingSection(_ m: PhotoMetadata) -> some View {
         SectionBox(title: "撮影情報") {
             InfoRow(label: "撮影日", value: m.captureDate.map { ExifFormat.dateFormatter.string(from: $0) })
             InfoRow(label: "ISO", value: m.iso.map { "\($0)" })

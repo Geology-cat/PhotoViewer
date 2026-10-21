@@ -94,7 +94,10 @@ final class ThumbnailLoader: @unchecked Sendable {
         if Task.isCancelled { return nil }
 
         let image: CGImage?
-        if fileSize >= Self.largeFileThreshold {
+        if SupportedFormats.isVideo(url) {
+            // 動画は必要な所だけを読むので、大きくても順番待ちにしない
+            image = await VideoSupport.thumbnail(of: url, maxPixel: bucket)
+        } else if fileSize >= Self.largeFileThreshold {
             image = await runSerially { Self.makeImage(url: url, maxPixel: bucket, allowFullDecode: allowFullDecode) }
         } else {
             image = Self.makeImage(url: url, maxPixel: bucket, allowFullDecode: allowFullDecode)

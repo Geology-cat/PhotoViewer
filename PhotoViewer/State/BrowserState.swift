@@ -247,13 +247,13 @@ final class BrowserState {
             var iterator = urls.makeIterator()
             for _ in 0..<4 {
                 guard let u = iterator.next() else { break }
-                group.addTask { (u, MetadataReader.read(url: u)) }
+                group.addTask { (u, await MetadataReader.readAny(url: u)) }
             }
             while let (u, m) = await group.next() {
                 result[u] = m
                 if Task.isCancelled { group.cancelAll(); break }
                 if let next = iterator.next() {
-                    group.addTask { (next, MetadataReader.read(url: next)) }
+                    group.addTask { (next, await MetadataReader.readAny(url: next)) }
                 }
             }
             return result
@@ -470,7 +470,7 @@ final class BrowserState {
         if let running = metadataTasks[url] {
             task = running
         } else {
-            task = Task.detached(priority: .userInitiated) { MetadataReader.read(url: url) }
+            task = Task.detached(priority: .userInitiated) { await MetadataReader.readAny(url: url) }
             metadataTasks[url] = task
         }
         let m = await task.value

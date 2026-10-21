@@ -316,3 +316,33 @@ extension TIFFCompositeReaderTests {
         return zip(pa, pb).reduce(0.0) { $0 + abs(Double($1.0) - Double($1.1)) } / Double(pa.count)
     }
 }
+
+struct VideoSupportTests {
+    @Test func ISO6709の位置() throws {
+        let c = try #require(VideoSupport.parseISO6709("+35.6812+139.7671+012.345/"))
+        #expect(abs(c.latitude - 35.6812) < 1e-9 && abs(c.longitude - 139.7671) < 1e-9)
+        let s = try #require(VideoSupport.parseISO6709("-33.8568+151.2153/"))
+        #expect(s.latitude < 0 && s.longitude > 0)
+        let w = try #require(VideoSupport.parseISO6709("+40.6892-074.0445/"))
+        #expect(w.longitude < 0)
+        #expect(VideoSupport.parseISO6709("壊れた値") == nil)
+    }
+
+    @Test func 動画の日時() {
+        #expect(VideoSupport.parseISODate("2023-10-17T14:05:09+0900") != nil)
+        #expect(VideoSupport.parseISODate("2023-10-17T14:05:09+09:00") != nil)
+        #expect(VideoSupport.parseISODate("いつか") == nil)
+    }
+
+    @Test func 長さの表示() {
+        #expect(ExifFormat.duration(12.34) == "12.3 秒")
+        #expect(ExifFormat.duration(83) == "1:23")
+        #expect(ExifFormat.duration(3723) == "1:02:03")
+    }
+
+    @Test func 動画を対応形式に含める() {
+        #expect(SupportedFormats.isSupported(URL(fileURLWithPath: "/a/IMG_0001.MOV")))
+        #expect(SupportedFormats.isVideo(URL(fileURLWithPath: "/a/clip.mp4")))
+        #expect(!SupportedFormats.isVideo(URL(fileURLWithPath: "/a/photo.jpg")))
+    }
+}

@@ -11,6 +11,8 @@ final class PhotoGridItem: NSCollectionViewItem {
     /// 左下：★、右上：現像済みマーク
     private let ratingLabel = NSTextField(labelWithString: "")
     private let developedBadge = NSImageView()
+    /// 右下：動画の印
+    private let videoBadge = NSImageView()
     private var loadTask: Task<Void, Never>?
     private var showName = true
 
@@ -48,6 +50,14 @@ final class PhotoGridItem: NSCollectionViewItem {
         developedBadge.isHidden = true
         v.addSubview(developedBadge)
 
+        let videoConfig = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+            .applying(.init(paletteColors: [.white, .black.withAlphaComponent(0.55)]))
+        videoBadge.image = NSImage(systemSymbolName: "play.circle.fill", accessibilityDescription: "動画")?
+            .withSymbolConfiguration(videoConfig)
+        videoBadge.toolTip = "動画"
+        videoBadge.isHidden = true
+        v.addSubview(videoBadge)
+
         view = v
     }
 
@@ -64,6 +74,7 @@ final class PhotoGridItem: NSCollectionViewItem {
         ratingLabel.frame = NSRect(x: inset + 4, y: labelH + inset + 4,
                                    width: ratingSize.width + 8, height: ratingSize.height + 2)
         developedBadge.frame = NSRect(x: b.width - inset - 22, y: b.height - inset - 22, width: 18, height: 18)
+        videoBadge.frame = NSRect(x: b.width - inset - 26, y: labelH + inset + 4, width: 22, height: 22)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         selectionLayer.frame = b
@@ -122,6 +133,7 @@ final class PhotoGridItem: NSCollectionViewItem {
         representedURL = url
         nameLabel.stringValue = photo.name
         nameLabel.isHidden = !showName
+        videoBadge.isHidden = !photo.isVideo
         if self.showName != showName {
             self.showName = showName
             view.needsLayout = true

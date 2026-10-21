@@ -42,6 +42,9 @@ struct PhotoMetadata: Hashable, Sendable {
     var altitude: Double?
     /// ファイル内の XMP に書かれたレーティング（サイドカーが無いときに使う）
     var embeddedRating: Int?
+    /// 動画の長さ（秒）とフレームレート
+    var duration: Double?
+    var frameRate: Double?
 
     static let empty = PhotoMetadata()
 
@@ -89,6 +92,15 @@ enum ExifFormat {
         f.dateFormat = "yyyy/MM/dd HH:mm:ss"
         return f
     }()
+
+    /// 動画の長さ：「12.3 秒」「1:23」「1:02:03」
+    static func duration(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "-" }
+        if seconds < 60 { return String(format: "%.1f 秒", seconds) }
+        let total = Int(seconds.rounded())
+        let h = total / 3600, m = total / 60 % 60, s = total % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
 
     static func fileSize(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)

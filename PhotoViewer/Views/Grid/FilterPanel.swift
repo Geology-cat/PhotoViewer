@@ -20,6 +20,9 @@ struct FilterPanel: View {
                     Button("RAW 以外") {
                         browser.filter.extensions = Set(browser.extensionCounts.map(\.ext).filter { !SupportedFormats.raw.contains($0) })
                     }
+                    Button("動画のみ") {
+                        browser.filter.extensions = Set(browser.extensionCounts.map(\.ext).filter(SupportedFormats.video.contains))
+                    }
                 }
                 .controlSize(.small)
                 ForEach(browser.extensionCounts, id: \.ext) { entry in

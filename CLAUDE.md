@@ -56,6 +56,10 @@ open build/Build/Products/Debug/PhotoViewer.app
 | 現像済みの項目 | 独自名前空間 `pv:Developed`（`https://github.com/Geology-cat/PhotoViewer/ns/1.0/`） |
 | 検索 | ファイル名・カメラ・レンズのフリーワード＋撮影日・撮影条件などの詳細条件 |
 | バッチリネーム | 同名の `.xmp` と RAW＋JPEG ペアも一緒に変更する（オプションでオフ可） |
+| 大きな TIF | `TIFFCompositeReader` で必要な部分だけ読む（ImageIO はレイヤー情報を含むファイル全体を読むため）。無圧縮ならサムネイルは行を飛び飛びに読む。撮影情報はタグだけ読む |
+| ディスクキャッシュ | 20MB 以上で読むのに 0.2 秒以上かかった画像の縮小版を `~/Library/Caches/com.geologycat.PhotoViewer/Thumbnails` に保存（1GB まで） |
+| 動画 | AVFoundation（サムネイル・撮影情報）。プレビューは AppKit の `AVPlayerView`（SwiftUI の `VideoPlayer` は起動時に異常終了したため使わない） |
+| サイドバーの即時反映 | FSEvents（`DirectoryEventWatcher`）で表示中の起点以下を監視 |
 
 ## コード構成
 ```

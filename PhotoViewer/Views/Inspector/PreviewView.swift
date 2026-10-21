@@ -1,3 +1,4 @@
+import AVKit
 import AppKit
 import SwiftUI
 
@@ -12,6 +13,18 @@ struct PreviewView: View {
     @State private var isLoading = false
 
     var body: some View {
+        if let item, item.isVideo {
+            // 動画はその場で再生できるようにする（自動では再生しない）
+            VideoPreview(url: item.url)
+                .id(item.url)
+                .padding(8)
+                .background(Color(nsColor: .underPageBackgroundColor))
+        } else {
+            imagePreview
+        }
+    }
+
+    private var imagePreview: some View {
         GeometryReader { geo in
             let pixel = ThumbnailLoader.bucket(for: Int(max(geo.size.width, geo.size.height) * displayScale))
             ZStack {
@@ -125,5 +138,34 @@ private struct RotateButtons: View {
         .padding(4)
         .background(.regularMaterial, in: Capsule())
         .padding(6)
+    }
+}
+
+/// 動画のプレビュー（再生・一時停止・コマ送りなどは AVKit の標準の操作）
+/// SwiftUI の VideoPlayer は環境によって起動時に異常終了したため、AppKit の AVPlayerView を直接使う
+private struct VideoPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        view.showsFullScreenToggleButton = true
+        view.player = AVPlayer(url: url)
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        // 別の動画に変わったら差し替える（同じなら何もしない）
+        if (view.player?.currentItem?.asset as? AVURLAsset)?.url != url {
+            view.player?.pause()
+            view.player = AVPlayer(url: url)
+        }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        // 別の写真を選んだら止める
+        view.player?.pause()
+        view.player = nil
     }
 }

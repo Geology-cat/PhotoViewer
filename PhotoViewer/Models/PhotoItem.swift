@@ -22,6 +22,7 @@ struct PhotoItem: Identifiable, Hashable, Sendable {
     /// 拡張子を除いたファイル名
     var baseName: String { url.deletingPathExtension().lastPathComponent }
     var isRAW: Bool { SupportedFormats.raw.contains(ext) }
+    var isVideo: Bool { SupportedFormats.video.contains(ext) }
     /// レーティング等を保存する XMP サイドカーの場所（同名の RAW と JPEG で共有）
     var sidecarURL: URL { url.deletingPathExtension().appendingPathExtension("xmp") }
 }
@@ -35,7 +36,13 @@ enum SupportedFormats {
     static let standard: Set<String> = [
         "jpg", "jpeg", "heic", "heif", "hif", "png", "tif", "tiff", "gif", "bmp", "webp", "avif", "psd",
     ]
-    static let all: Set<String> = raw.union(standard)
+    /// 動画（AVFoundation で再生できる形式）
+    static let video: Set<String> = ["mov", "mp4", "m4v", "mts", "m2ts", "3gp"]
+    static let all: Set<String> = raw.union(standard).union(video)
+
+    static func isVideo(_ url: URL) -> Bool {
+        video.contains(url.pathExtension.lowercased())
+    }
 
     static func isSupported(_ url: URL) -> Bool {
         all.contains(url.pathExtension.lowercased())
