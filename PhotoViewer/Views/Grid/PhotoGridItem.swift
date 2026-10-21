@@ -147,6 +147,6 @@ final class PhotoGridItem: NSCollectionViewItem {
     /// バックグラウンドでサムネイルを読む
     nonisolated private static func loadThumbnail(_ url: URL, pixelSize: Int) async -> CGImage? {
         if Task.isCancelled { return nil }
-        return ThumbnailLoader.shared.load(url, pixelSize: pixelSize, allowFullDecode: false)
+        return await ThumbnailLoader.shared.load(url, pixelSize: pixelSize, allowFullDecode: false)
     }
 }

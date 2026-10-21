@@ -40,14 +40,14 @@ struct PreviewView: View {
                 }
             }
             .task(id: PreviewKey(url: item?.url, pixel: pixel)) {
-                await load(url: item?.url, pixel: pixel)
+                await load(url: item?.url, pixel: pixel, fileSize: item?.fileSize ?? 0)
             }
         }
         .padding(8)
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 
-    private func load(url: URL?, pixel: Int) async {
+    private func load(url: URL?, pixel: Int, fileSize: Int64) async {
         guard let url else {
             image = nil
             loadedURL = nil
@@ -66,6 +66,14 @@ struct PreviewView: View {
         }
         isLoading = true
         defer { isLoading = false }
+        // 大きな TIF などは高画質の読み込みに数秒かかるので、先に中くらいの画像（素早く作れる）を出す
+        if fileSize >= ThumbnailLoader.largeFileThreshold, pixel > 768,
+           ThumbnailLoader.shared.cached(url, pixelSize: pixel) == nil {
+            if let medium = await Self.loadPreview(url, pixel: 768), !Task.isCancelled {
+                image = NSImage(cgImage: medium, size: .zero)
+                loadedURL = url
+            }
+        }
         let cg = await Self.loadPreview(url, pixel: pixel)
         guard !Task.isCancelled, let cg else { return }
         image = NSImage(cgImage: cg, size: .zero)
@@ -84,7 +92,7 @@ struct PreviewView: View {
 
     nonisolated private static func loadPreview(_ url: URL, pixel: Int) async -> CGImage? {
         if Task.isCancelled { return nil }
-        return ThumbnailLoader.shared.load(url, pixelSize: pixel, allowFullDecode: true)
+        return await ThumbnailLoader.shared.load(url, pixelSize: pixel, allowFullDecode: true)
     }
 }
 

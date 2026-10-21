@@ -171,3 +171,148 @@ extension PreviewRotationTests {
             == PreviewView.fittedSize(CGSize(width: 1500, height: 1000), rotation: 0, in: box))
     }
 }
+
+struct ThumbnailDiskCacheTests {
+    private func image(_ w: Int, _ h: Int) -> CGImage {
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()!
+    }
+
+    @Test func 保存して読み戻せて元ファイルを更新すると別扱い() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cache = ThumbnailDiskCache(directory: dir.appendingPathComponent("cache"))
+        let src = dir.appendingPathComponent("big.tif")
+        try Data("dummy".utf8).write(to: src)
+        #expect(cache.read(src, bucket: 512) == nil)
+        cache.write(image(512, 341), for: src, bucket: 512)
+        let back = try #require(cache.read(src, bucket: 512))
+        #expect(back.width == 512 && back.height == 341)
+        // 元ファイルを書き換えると（サイズ・更新日が変わると）、保存済みのものは使わない
+        try Data("dummy-changed".utf8).write(to: src)
+        #expect(cache.read(src, bucket: 512) == nil)
+    }
+
+    @Test func 上限を超えたら古いものから消す() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cache = ThumbnailDiskCache(directory: dir)
+        for i in 0..<10 {
+            let f = dir.appendingPathComponent("f\(i).jpg")
+            try Data(count: 1000).write(to: f)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(i))],
+                                                  ofItemAtPath: f.path)
+        }
+        cache.prune(limit: 5000)
+        let left = try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted()
+        #expect(left.count == 4)
+        #expect(left.first == "f6.jpg")
+    }
+
+    @Test func 縮小は長辺を合わせる() throws {
+        let small = try #require(ThumbnailLoader.downscale(image(2048, 1365), maxPixel: 256))
+        #expect(small.width == 256)
+        #expect(ThumbnailLoader.downscale(image(200, 100), maxPixel: 256) == nil)
+    }
+}
+
+/// 大きな TIF の一部だけを読む処理が、通常の読み方と同じ結果になること
+struct TIFFCompositeReaderTests {
+    /// テスト用の TIF を作る（EXIF・GPS・回転なし、16bit）
+    private func makeTIFF(_ url: URL, width: Int = 300, height: Int = 200, bigEndianHint: Bool = false) throws {
+        let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 16, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder16Little.rawValue)!
+        for x in 0..<width {
+            ctx.setFillColor(CGColor(red: Double(x) / Double(width), green: 0.3, blue: 0.7, alpha: 1))
+            ctx.fill(CGRect(x: x, y: 0, width: 1, height: height))
+        }
+        let image = try #require(ctx.makeImage())
+        let dest = try #require(CGImageDestinationCreateWithURL(url as CFURL, "public.tiff" as CFString, 1, nil))
+        let props: [CFString: Any] = [
+            kCGImagePropertyExifDictionary: [kCGImagePropertyExifISOSpeedRatings: [3200], kCGImagePropertyExifFNumber: 2.8,
+                                             kCGImagePropertyExifDateTimeOriginal: "2025:08:22 01:02:03"],
+            kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFMake: "Canon", kCGImagePropertyTIFFModel: "EOS 6D"],
+            kCGImagePropertyGPSDictionary: [kCGImagePropertyGPSLatitude: 41.8, kCGImagePropertyGPSLatitudeRef: "N",
+                                            kCGImagePropertyGPSLongitude: 141.1, kCGImagePropertyGPSLongitudeRef: "E"],
+        ]
+        CGImageDestinationAddImage(dest, image, props as CFDictionary)
+        #expect(CGImageDestinationFinalize(dest))
+    }
+
+    @Test func 撮影情報が通常の読み方と同じ() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).tif")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try makeTIFF(url)
+        let tiff = try #require(TIFFCompositeReader.metadata(of: url))
+        let fast = MetadataReader.parse(properties: tiff.properties)
+        let src = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let normal = MetadataReader.parse(properties: try #require(CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]))
+        #expect(fast == normal)
+        #expect(fast.iso == 3200)
+        #expect(fast.pixelWidth == 300 && fast.pixelHeight == 200)
+        #expect(fast.coordinate != nil)
+    }
+
+    @Test func サムネイルが通常の読み方と同じ大きさ() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).tif")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try makeTIFF(url)
+        let fast = try #require(TIFFCompositeReader.thumbnail(of: url, maxPixel: 128))
+        #expect(fast.width == 128)
+        #expect(fast.height == 85 || fast.height == 86)
+    }
+
+    @Test func TIFでなければ使わない() {
+        #expect(!TIFFCompositeReader.shouldUse(URL(fileURLWithPath: "/a.jpg"), fileSize: 1 << 30))
+        #expect(!TIFFCompositeReader.shouldUse(URL(fileURLWithPath: "/a.tif"), fileSize: 1 << 20))
+        #expect(TIFFCompositeReader.shouldUse(URL(fileURLWithPath: "/a.TIF"), fileSize: 1 << 30))
+        #expect(TIFFCompositeReader.metadata(of: URL(fileURLWithPath: "/存在しない.tif")) == nil)
+    }
+}
+
+extension TIFFCompositeReaderTests {
+    /// 無圧縮の縦長 TIF（行を飛び飛びに読む方法が使われる大きさ）
+    @Test func 行を飛び飛びに読んでも通常のサムネイルとほぼ同じ() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).tif")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let w = 400, h = 2400
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 16, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder16Little.rawValue)!
+        // 上から下へのなめらかな色の変化
+        for y in stride(from: 0, to: h, by: 8) {
+            ctx.setFillColor(CGColor(red: Double(y) / Double(h), green: 0.5, blue: 1 - Double(y) / Double(h), alpha: 1))
+            ctx.fill(CGRect(x: 0, y: y, width: w, height: 8))
+        }
+        let dest = try #require(CGImageDestinationCreateWithURL(url as CFURL, "public.tiff" as CFString, 1, nil))
+        CGImageDestinationAddImage(dest, try #require(ctx.makeImage()),
+                                   [kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFCompression: 1]] as CFDictionary)
+        #expect(CGImageDestinationFinalize(dest))
+
+        let fast = try #require(TIFFCompositeReader.thumbnail(of: url, maxPixel: 120))
+        let src = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let normal = try #require(CGImageSourceCreateThumbnailAtIndex(src, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 120,
+        ] as CFDictionary))
+        #expect(fast.width == normal.width && fast.height == normal.height)
+        #expect(Self.meanDifference(fast, normal) < 4)
+    }
+
+    static func meanDifference(_ a: CGImage, _ b: CGImage) -> Double {
+        func pixels(_ img: CGImage) -> [UInt8] {
+            var buf = [UInt8](repeating: 0, count: img.width * img.height * 4)
+            let ctx = CGContext(data: &buf, width: img.width, height: img.height, bitsPerComponent: 8,
+                                bytesPerRow: img.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: img.width, height: img.height))
+            return buf
+        }
+        let pa = pixels(a), pb = pixels(b)
+        return zip(pa, pb).reduce(0.0) { $0 + abs(Double($1.0) - Double($1.1)) } / Double(pa.count)
+    }
+}

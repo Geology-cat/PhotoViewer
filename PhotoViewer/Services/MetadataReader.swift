@@ -4,6 +4,13 @@ import ImageIO
 /// ImageIO で撮影情報を読み取る（UI に依存しない。どのスレッドからでも呼べる）
 enum MetadataReader {
     static func read(url: URL) -> PhotoMetadata {
+        // 大きな TIF はタグだけを読む（ImageIO はファイル全体を読むため、数百 MB だと 10 秒以上かかる）
+        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init) ?? 0
+        if TIFFCompositeReader.shouldUse(url, fileSize: fileSize), let tiff = TIFFCompositeReader.metadata(of: url) {
+            var meta = parse(properties: tiff.properties)
+            if let xmp = tiff.xmp { meta.embeddedRating = embeddedRating(from: xmp) }
+            return meta
+        }
         let options = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, options) else { return .empty }
         guard let raw = CGImageSourceCopyPropertiesAtIndex(source, 0, options) as? [CFString: Any] else {

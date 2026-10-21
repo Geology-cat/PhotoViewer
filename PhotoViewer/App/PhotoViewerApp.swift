@@ -9,6 +9,11 @@ struct PhotoViewerApp: App {
     @AppStorage("inspector.visible") private var showInspector = true
     @AppStorage("sidebar.listRoot") private var listRoot = ""
 
+    init() {
+        // ディスクに保存した縮小画像が多すぎたら、古いものから消す
+        Task.detached(priority: .background) { ThumbnailDiskCache.shared.prune() }
+    }
+
     var body: some Scene {
         Window("PhotoViewer", id: "main") {
             ContentView()

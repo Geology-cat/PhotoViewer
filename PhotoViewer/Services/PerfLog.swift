@@ -30,6 +30,14 @@ enum PerfLog {
         log("サイドカー読み直し: 変更 \(changed) 件・削除 \(removed) 件（全 \(total) 件）")
     }
 
+    /// サムネイル・プレビュー 1 枚の用意にかかった時間（計測時のみ。バックグラウンドから呼べる）
+    nonisolated static func image(_ name: String, bucket: Int, source: String, since start: ContinuousClock.Instant) {
+        guard ProcessInfo.processInfo.environment["PV_PERF"] == "1" else { return }
+        let d = start.duration(to: .now).components
+        let ms = Double(d.seconds) * 1000 + Double(d.attoseconds) / 1e15
+        FileHandle.standardError.write(Data(String(format: "[perf] 画像 %@ %dpx %@ %.0f ms\n", name, bucket, source, ms).utf8))
+    }
+
     static func metadataLoaded(count: Int, since start: ContinuousClock.Instant) {
         log("撮影情報の一括読み込み: \(count) 件 \(ms(start.duration(to: .now)))")
     }
