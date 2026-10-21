@@ -64,6 +64,49 @@ enum StressTest {
         log("大きさ \(Int(size))：\(firstRow.count) 列、セル \(Int(frames[0].width)) pt、横の間隔 \(gaps(firstRow).sorted())、縦の間隔 \(vertical ?? -1)、最後の行 \(lastRow.count) 個の間隔 \(gaps(lastRow).sorted())、左端 \(Int(frames[0].minX))/\(Int(lastRow[0].minX))")
     }
 
+    /// 表示中のセルが重なっていないか・間隔が 8pt か・左端が揃っているかを調べる。問題があれば内容を返す
+    private static func layoutProblems(_ cv: NSCollectionView) -> String? {
+        let cells = cv.visibleItems().map(\.view.frame).sorted { ($0.minY, $0.minX) < ($1.minY, $1.minX) }
+        guard cells.count > 1 else { return nil }
+        for (i, a) in cells.enumerated() {
+            for b in cells[(i + 1)...] where a.insetBy(dx: 1, dy: 1).intersects(b) {
+                return "セルが重なっている \(a) \(b)"
+            }
+        }
+        let rows = Dictionary(grouping: cells) { Int($0.minY.rounded()) }
+        for (_, row) in rows {
+            let r = row.sorted { $0.minX < $1.minX }
+            if Int(r[0].minX.rounded()) != 8 { return "行の左端が \(r[0].minX)" }
+            for (a, b) in zip(r, r.dropFirst()) where abs(b.minX - a.maxX - 8) > 0.5 {
+                return "横の間隔が \(b.minX - a.maxX)"
+            }
+        }
+        return nil
+    }
+
+    /// ウインドウの幅を 1pt ずつ変えながら、グリッドの並びが崩れないかを調べる（中途半端な幅でセルが重なった不具合の確認）
+    private static func checkWidths() async {
+        guard let cv = collectionView, let window = cv.window else { return }
+        log("ウインドウの幅を変えながら並びを確認")
+        let original = window.frame
+        var problems = 0, checked = 0
+        for w in stride(from: 900.0, through: 1400, by: 1) {
+            var f = window.frame
+            f.size.width = w
+            window.setFrame(f, display: true)
+            window.layoutIfNeeded()
+            cv.layoutSubtreeIfNeeded()
+            if let p = layoutProblems(cv) {
+                problems += 1
+                if problems <= 3 { log("幅 \(Int(w))：\(p)") }
+            }
+            checked += 1
+            if checked % 50 == 0 { await pause(10) }
+        }
+        window.setFrame(original, display: true)
+        log("幅の確認：\(checked) 通り中、崩れ \(problems) 件")
+    }
+
     /// ←→ キーが行の端で前後の行へ回り込むか（実際のキーイベントをグリッドに送って確かめる）
     private static func checkArrowWrap(_ browser: BrowserState) {
         guard let cv = collectionView, let window = cv.window, browser.displayedItems.count > 2,
@@ -88,6 +131,16 @@ enum StressTest {
         press(123, 0xF702)   // ←
         let left = browser.primarySelection == lastInRow
         log("←→ の回り込み（\(columns) 列）：→ \(right ? "OK" : "NG")、← \(left ? "OK" : "NG")")
+        // ↓↑ は 1 行下・上の同じ列へ（標準の動作。レイアウトを自前にしても動くか）
+        let top = browser.displayedItems[0].url
+        browser.updateSelection([top], lastAdded: top)
+        cv.selectionIndexPaths = [IndexPath(item: 0, section: 0)]
+        (cv as PhotoCollectionView).resetAnchor(to: IndexPath(item: 0, section: 0))
+        press(125, 0xF701)   // ↓
+        let down = browser.primarySelection == browser.displayedItems[columns].url
+        press(126, 0xF700)   // ↑
+        let up = browser.primarySelection == top
+        log("↓↑ の移動：↓ \(down ? "OK" : "NG")、↑ \(up ? "OK" : "NG")")
     }
 
     private static func run(browser: BrowserState, folders: [URL], writable: URL?) async {
@@ -122,6 +175,7 @@ enum StressTest {
             }
 
             checkArrowWrap(browser)
+            await checkWidths()
 
             log("並べ替えを全種類")
             for key in SortKey.allCases {

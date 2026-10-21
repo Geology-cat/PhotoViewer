@@ -230,27 +230,22 @@ final class GridDataSource: NSObject, NSCollectionViewDataSource {
     }
 }
 
-/// 列数指定・サイズ指定に応じてセルの大きさを決めるレイアウト
-final class GridLayout: NSCollectionViewFlowLayout {
+/// 列数指定・サイズ指定に応じてセルを並べるレイアウト
+/// 並べ方はすべてここで計算する（NSCollectionViewFlowLayout は余った幅をセルの間に振り分けるうえ、
+/// 行に入る数を独自に決めるため、間隔を固定しようとすると中途半端な幅で計算が食い違ってセルが重なった）
+final class GridLayout: NSCollectionViewLayout {
     var config: GridLayoutConfig?
-    private var lastWidth: CGFloat = 0
-    /// 1 行に並べる数（セルの左端の位置を揃えるのに使う）
-    private var columns = 1
     static let labelHeight: CGFloat = 20
     static let spacing: CGFloat = 8
 
-    override init() {
-        super.init()
-        minimumInteritemSpacing = Self.spacing
-        minimumLineSpacing = Self.spacing
-        sectionInset = NSEdgeInsets(top: Self.spacing, left: Self.spacing, bottom: Self.spacing, right: Self.spacing)
-    }
-
-    required init?(coder: NSCoder) { fatalError("未対応") }
+    /// セルの大きさ（サムネイルの読み込みサイズの計算にも使う）
+    private(set) var itemSize = NSSize(width: 160, height: 160 + labelHeight)
+    private var columns = 1
+    private var count = 0
+    private var width: CGFloat = 0
 
     /// 列数とセルの幅
     /// セルの間隔は常に spacing に固定し、横幅の余りはセルを少し大きくして埋める
-    /// （大きさをそのまま使うと、余りが全部セルの間に振り分けられ、大きさを変えるたびに間隔が大きく広がるため）
     nonisolated static func columnsAndSide(available: CGFloat, mode: GridLayoutMode, thumbnailSize: CGFloat,
                                            columns: Int, spacing: CGFloat) -> (columns: Int, side: CGFloat) {
         let n: Int
@@ -265,38 +260,57 @@ final class GridLayout: NSCollectionViewFlowLayout {
     }
 
     override func prepare() {
-        if let cv = collectionView, let config {
-            let width = cv.enclosingScrollView?.contentView.bounds.width ?? cv.bounds.width
-            lastWidth = width
-            let available = max(width - sectionInset.left - sectionInset.right, 40)
-            let (n, side) = Self.columnsAndSide(available: available, mode: config.mode,
-                                                thumbnailSize: CGFloat(config.thumbnailSize),
-                                                columns: config.columns, spacing: Self.spacing)
-            columns = n
-            itemSize = NSSize(width: side, height: side + (config.showNames ? Self.labelHeight : 0))
-        }
         super.prepare()
+        guard let cv = collectionView else { return }
+        width = cv.enclosingScrollView?.contentView.bounds.width ?? cv.bounds.width
+        count = cv.numberOfSections > 0 ? cv.numberOfItems(inSection: 0) : 0
+        let config = self.config ?? GridLayoutConfig(mode: .size, thumbnailSize: GridSettings.defaultSize,
+                                                     columns: GridSettings.defaultColumns, showNames: true)
+        let available = max(width - Self.spacing * 2, 40)
+        let (n, side) = Self.columnsAndSide(available: available, mode: config.mode,
+                                            thumbnailSize: CGFloat(config.thumbnailSize),
+                                            columns: config.columns, spacing: Self.spacing)
+        columns = n
+        itemSize = NSSize(width: side, height: side + (config.showNames ? Self.labelHeight : 0))
     }
 
-    // 最後の行など列が埋まらない行も、間隔を広げずに左から詰めて並べる
+    private var rows: Int { count == 0 ? 0 : (count + columns - 1) / columns }
+
+    override var collectionViewContentSize: NSSize {
+        let height = rows == 0 ? 0 : Self.spacing + CGFloat(rows) * (itemSize.height + Self.spacing)
+        return NSSize(width: width, height: height)
+    }
+
+    private func frame(ofItem item: Int) -> NSRect {
+        let row = item / columns, column = item % columns
+        return NSRect(x: Self.spacing + CGFloat(column) * (itemSize.width + Self.spacing),
+                      y: Self.spacing + CGFloat(row) * (itemSize.height + Self.spacing),
+                      width: itemSize.width, height: itemSize.height)
+    }
+
+    private func attributes(ofItem item: Int) -> NSCollectionViewLayoutAttributes {
+        let a = NSCollectionViewLayoutAttributes(forItemWith: IndexPath(item: item, section: 0))
+        a.frame = frame(ofItem: item)
+        return a
+    }
+
     override func layoutAttributesForElements(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
-        super.layoutAttributesForElements(in: rect).map(aligned)
+        guard count > 0 else { return [] }
+        let rowHeight = itemSize.height + Self.spacing
+        let firstRow = max(0, Int(floor((rect.minY - Self.spacing) / rowHeight)))
+        let lastRow = min(rows - 1, Int(floor((rect.maxY - Self.spacing) / rowHeight)))
+        guard firstRow <= lastRow else { return [] }
+        let first = firstRow * columns, last = min(count - 1, (lastRow + 1) * columns - 1)
+        return (first...last).map(attributes(ofItem:)).filter { $0.frame.intersects(rect) }
     }
 
     override func layoutAttributesForItem(at indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? {
-        super.layoutAttributesForItem(at: indexPath).map(aligned)
-    }
-
-    private func aligned(_ attributes: NSCollectionViewLayoutAttributes) -> NSCollectionViewLayoutAttributes {
-        guard attributes.representedElementCategory == .item, let path = attributes.indexPath else { return attributes }
-        let copy = attributes.copy() as! NSCollectionViewLayoutAttributes
-        let column = path.item % max(columns, 1)
-        copy.frame.origin.x = sectionInset.left + CGFloat(column) * (itemSize.width + Self.spacing)
-        return copy
+        guard indexPath.section == 0, (0..<count).contains(indexPath.item) else { return nil }
+        return attributes(ofItem: indexPath.item)
     }
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
-        newBounds.width != lastWidth || super.shouldInvalidateLayout(forBoundsChange: newBounds)
+        newBounds.width != width
     }
 }
 
