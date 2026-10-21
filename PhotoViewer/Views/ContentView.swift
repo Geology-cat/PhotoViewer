@@ -37,6 +37,7 @@ struct ContentView: View {
         .navigationTitle(browser.currentFolder?.lastPathComponent ?? "PhotoViewer")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
+        .background(ToolbarDisplayModeSetter())
         .searchable(text: $browser.filter.text, placement: .toolbar, prompt: "ファイル名・カメラ・レンズ")
         .onAppear { browser.restoreLastFolder() }
         .sheet(isPresented: Binding(
@@ -109,6 +110,22 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigation) {
+            Button {
+                browser.goBack()
+            } label: {
+                Label("戻る", systemImage: "chevron.left")
+            }
+            .disabled(!browser.canGoBack)
+            .help("前に表示していた階層へ戻る（⌘[）")
+            Button {
+                browser.goForward()
+            } label: {
+                Label("進む", systemImage: "chevron.right")
+            }
+            .disabled(!browser.canGoForward)
+            .help("戻る前の階層へ進む（⌘]）")
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 showFilter.toggle()
@@ -188,6 +205,26 @@ private struct InspectorView: View {
                 .frame(minHeight: 160, idealHeight: 360)
             InfoPanelView(item: browser.primaryItem)
                 .frame(minHeight: 140, idealHeight: 300)
+        }
+    }
+}
+
+/// ツールバーを「アイコンとテキスト」で表示する（SwiftUI には表示方式を指定する API がないため、ウインドウのツールバーに直接設定する）
+private struct ToolbarDisplayModeSetter: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { ToolbarModeView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class ToolbarModeView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+            // ツールバーはビューより後に作られることがあるので、少し後にもう一度設定する
+            DispatchQueue.main.async { [weak self] in self?.apply() }
+        }
+
+        private func apply() {
+            guard let toolbar = window?.toolbar, toolbar.displayMode != .iconAndLabel else { return }
+            toolbar.displayMode = .iconAndLabel
         }
     }
 }

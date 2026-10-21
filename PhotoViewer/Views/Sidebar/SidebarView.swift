@@ -61,6 +61,18 @@ private struct FolderListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if rootURL == nil {
+                // 一覧にいるときも「戻る」「進む」を出す
+                HStack(spacing: 4) {
+                    NavigationButtons()
+                    Text("よく使う項目・ドライブ").font(.headline).lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 10)
+                .padding(.top, 2)
+                .padding(.bottom, 4)
+            }
             // どの階層にいても、ドライブへすぐ移れるタブ
             DriveTabBar(volumes: tree.volumes, activeVolume: rootPath.isEmpty ? nil : rootVolume?.url,
                         isTopActive: rootPath.isEmpty,
@@ -83,6 +95,8 @@ private struct FolderListView: View {
             )
         }
         .task(id: rootPath) { checkRoot() }
+        // 一覧に戻った・タブを切り替えたなど、起点だけが変わったときも履歴に残す
+        .onChange(of: rootPath) { _, _ in browser.recordLocation() }
         .alert("取り出せませんでした", isPresented: Binding(
             get: { ejectError != nil }, set: { if !$0 { ejectError = nil } }
         )) {
@@ -110,10 +124,11 @@ private struct FolderListView: View {
                 .help(v.capacityText ?? v.kind.sectionTitle)
             }
             HStack(spacing: 4) {
+                NavigationButtons()
                 Button {
                     goUp(from: root)
                 } label: {
-                    Image(systemName: "chevron.up")
+                    Image(systemName: "arrow.turn.left.up")
                 }
                 .help("上の階層へ（⌘↑）")
                 .disabled(root.path == "/")
@@ -281,6 +296,36 @@ enum SidebarNavigation {
         let parent = root.deletingLastPathComponent()
         rootPath = parent.standardizedFileURL.path
         browser.open(folder: parent)
+    }
+}
+
+// MARK: - 戻る・進むボタン
+
+/// 「＜」「＞」：前に表示していた階層へ戻る・戻る前の階層へ進む（Finder と同じ。⌘[ ／ ⌘]）
+struct NavigationButtons: View {
+    @Environment(BrowserState.self) private var browser
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button {
+                browser.goBack()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .fontWeight(.semibold)
+                    .frame(width: 18)
+            }
+            .disabled(!browser.canGoBack)
+            .help("戻る（⌘[）")
+            Button {
+                browser.goForward()
+            } label: {
+                Image(systemName: "chevron.right")
+                    .fontWeight(.semibold)
+                    .frame(width: 18)
+            }
+            .disabled(!browser.canGoForward)
+            .help("進む（⌘]）")
+        }
     }
 }
 

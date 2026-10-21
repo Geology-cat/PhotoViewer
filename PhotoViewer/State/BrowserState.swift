@@ -84,9 +84,57 @@ final class BrowserState {
         }
     }
 
-    func open(folder: URL) {
+    // MARK: - 戻る・進む（Finder と同じ移動の履歴）
+
+    /// 履歴の 1 件：表示していたフォルダと、サイドバー（リスト表示）の起点
+    struct Location: Equatable {
+        var folder: URL?
+        var listRoot: String
+    }
+
+    private(set) var history: [Location] = []
+    private(set) var historyIndex = -1
+    var canGoBack: Bool { historyIndex > 0 }
+    var canGoForward: Bool { historyIndex >= 0 && historyIndex < history.count - 1 }
+
+    static let listRootKey = "sidebar.listRoot"
+
+    /// 今の場所を履歴に加える（直前と同じなら何もしない。戻った後に別の場所へ移ったら「進む」側は捨てる）
+    func recordLocation() {
+        let loc = Location(folder: currentFolder,
+                           listRoot: UserDefaults.standard.string(forKey: Self.listRootKey) ?? "")
+        if historyIndex >= 0, history[historyIndex] == loc { return }
+        history = Array(history.prefix(historyIndex + 1))
+        history.append(loc)
+        if history.count > 100 { history.removeFirst(history.count - 100) }
+        historyIndex = history.count - 1
+    }
+
+    func goBack() {
+        guard canGoBack else { return }
+        historyIndex -= 1
+        apply(history[historyIndex])
+    }
+
+    func goForward() {
+        guard canGoForward else { return }
+        historyIndex += 1
+        apply(history[historyIndex])
+    }
+
+    private func apply(_ loc: Location) {
+        UserDefaults.standard.set(loc.listRoot, forKey: Self.listRootKey)
+        if let f = loc.folder {
+            open(folder: f, recordHistory: false)
+        } else {
+            closeFolder()
+        }
+    }
+
+    func open(folder: URL, recordHistory: Bool = true) {
         let folder = folder.standardizedFileURL
         guard folder != currentFolder else { return }
+        defer { if recordHistory { recordLocation() } }
         currentFolder = folder
         watcher.watch(folder)
         // フォルダを移ったら撮影情報のキャッシュは捨てる（メモリを増やし続けないため）

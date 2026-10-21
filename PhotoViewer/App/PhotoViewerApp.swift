@@ -55,6 +55,12 @@ struct PhotoViewerApp: App {
                 .disabled(targets.isEmpty)
             }
             CommandGroup(after: .sidebar) {
+                Button("戻る") { browser.goBack() }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!browser.canGoBack)
+                Button("進む") { browser.goForward() }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(!browser.canGoForward)
                 Button("上の階層へ") { SidebarNavigation.goUp(rootPath: &listRoot, browser: browser) }
                     .keyboardShortcut(.upArrow, modifiers: .command)
                     .disabled(listRoot.isEmpty)
