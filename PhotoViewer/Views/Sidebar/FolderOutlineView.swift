@@ -63,7 +63,8 @@ struct FolderOutlineView: NSViewRepresentable {
         column.resizingMask = .autoresizingMask
         outline.addTableColumn(column)
         outline.outlineTableColumn = column
-        outline.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        // 列は常にツリーの幅いっぱいにする（FolderOutline.layout でも合わせる）
+        outline.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
 
         let c = context.coordinator
         c.outline = outline
@@ -328,6 +329,15 @@ final class FolderOutline: NSOutlineView {
     var onReturn: (() -> Void)?
     var menuProvider: ((Int) -> NSMenu?)?
 
+    /// 列の幅をツリーの幅に合わせる
+    /// macOS 15 では列が自動では広がらず、既定の狭い幅のままになってフォルダ名が数文字で切れていた
+    override func layout() {
+        super.layout()
+        if let column = tableColumns.first, abs(column.width - bounds.width) > 1, bounds.width > 0 {
+            sizeLastColumnToFit()
+        }
+    }
+
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36 || event.keyCode == 76 {
             onReturn?()
@@ -353,6 +363,8 @@ final class FolderCellView: NSTableCellView {
     private let ejectButton = NSButton()
     private var volume: VolumeInfo?
     private var onEject: ((VolumeInfo) -> Void)?
+    /// 取り出しボタンを出さない行では幅を 0 にして、名前の欄を右端まで使う
+    private lazy var ejectWidth = ejectButton.widthAnchor.constraint(equalToConstant: 16)
 
     init() {
         super.init(frame: .zero)
@@ -363,7 +375,8 @@ final class FolderCellView: NSTableCellView {
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.imageScaling = .scaleProportionallyUpOrDown
         title.translatesAutoresizingMaskIntoConstraints = false
-        title.lineBreakMode = .byTruncatingMiddle
+        // 収まらないときだけ末尾を「…」で省略する
+        title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         detail.translatesAutoresizingMaskIntoConstraints = false
         detail.font = .systemFont(ofSize: 10)
@@ -385,6 +398,7 @@ final class FolderCellView: NSTableCellView {
         texts.spacing = 0
         texts.translatesAutoresizingMaskIntoConstraints = false
         texts.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        texts.setHuggingPriority(.defaultLow, for: .horizontal)
 
         addSubview(icon)
         addSubview(texts)
@@ -396,10 +410,12 @@ final class FolderCellView: NSTableCellView {
             icon.heightAnchor.constraint(equalToConstant: 18),
             texts.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
             texts.centerYAnchor.constraint(equalTo: centerYAnchor),
-            texts.trailingAnchor.constraint(lessThanOrEqualTo: ejectButton.leadingAnchor, constant: -4),
+            // 名前の欄は取り出しボタンの手前まで必ず広げる（「以下」の制約だけだと、
+            // macOS 15 では極端に狭く計算されて名前が数文字で切れていた）
+            texts.trailingAnchor.constraint(equalTo: ejectButton.leadingAnchor, constant: -4),
             ejectButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             ejectButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            ejectButton.widthAnchor.constraint(equalToConstant: 16),
+            ejectWidth,
         ])
     }
 
@@ -417,6 +433,7 @@ final class FolderCellView: NSTableCellView {
             detail.stringValue = v.capacityText ?? ""
             detail.isHidden = v.capacityText == nil
             ejectButton.isHidden = !v.kind.isEjectable
+            ejectWidth.constant = v.kind.isEjectable ? 16 : 0
         } else {
             volume = nil
             icon.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "フォルダ")
@@ -424,6 +441,7 @@ final class FolderCellView: NSTableCellView {
             title.font = .systemFont(ofSize: NSFont.systemFontSize)
             detail.isHidden = true
             ejectButton.isHidden = true
+            ejectWidth.constant = 0
         }
     }
 

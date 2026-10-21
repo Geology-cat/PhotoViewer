@@ -124,3 +124,27 @@ extension MetadataTests {
         #expect(m.exposureTime == 80)
     }
 }
+
+/// サイドバーの「親フォルダ」一覧が必ず終わること（macOS 15 で「/」の親が「/..」になり無限ループした不具合の再発防止）
+struct SidebarNavigationTests {
+    @Test func ルートの親フォルダは空() {
+        #expect(SidebarNavigation.ancestors(of: URL(fileURLWithPath: "/", isDirectory: true)).isEmpty)
+    }
+
+    @Test func 普通のフォルダは近い順にルートまで() {
+        let paths = SidebarNavigation.ancestors(of: URL(fileURLWithPath: "/Users/someone/Pictures", isDirectory: true))
+            .map(\.path)
+        #expect(paths == ["/Users/someone", "/Users", "/"])
+    }
+
+    @Test func 外付けドライブ() {
+        let paths = SidebarNavigation.ancestors(of: URL(fileURLWithPath: "/Volumes/LaCie_d2/写真", isDirectory: true))
+            .map(\.path)
+        #expect(paths == ["/Volumes/LaCie_d2", "/Volumes", "/"])
+    }
+
+    @Test func 親を表すドットを含むパスでも終わる() {
+        let result = SidebarNavigation.ancestors(of: URL(fileURLWithPath: "/../..", isDirectory: true))
+        #expect(result.count < 64)
+    }
+}

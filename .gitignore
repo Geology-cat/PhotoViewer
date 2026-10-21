@@ -11,3 +11,6 @@ xcuserdata/
 # テストデータ（Scripts/generate_testdata.swift で生成）
 TestData
 dist/
+
+# ユーザーからの不具合報告（公開リポジトリには入れない）
+不具合レポート/

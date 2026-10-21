@@ -228,16 +228,8 @@ private struct FolderListView: View {
         SidebarNavigation.goUp(rootPath: &rootPath, browser: browser)
     }
 
-    /// 自分自身を除く、親フォルダの一覧（近い順）
     private func ancestors(of url: URL) -> [URL] {
-        var result: [URL] = []
-        var u = url.deletingLastPathComponent()
-        while true {
-            result.append(u)
-            if u.path == "/" { break }
-            u = u.deletingLastPathComponent()
-        }
-        return result
+        SidebarNavigation.ancestors(of: url)
     }
 
     private func checkRoot() {
@@ -259,6 +251,22 @@ private struct FolderListView: View {
 
 @MainActor
 enum SidebarNavigation {
+    /// 自分自身を除く、親フォルダの一覧（近い順。最後が「/」）
+    /// macOS 15 では「/」の親を求めると「/..」が返り「/」に戻らないため、
+    /// 「/」に着いた・場所が変わらなかった・階層が深すぎる、のどれかで必ず止める
+    nonisolated static func ancestors(of url: URL) -> [URL] {
+        var result: [URL] = []
+        var current = url.standardizedFileURL
+        for _ in 0..<64 {
+            if current.path == "/" || current.path.isEmpty { break }
+            let parent = current.deletingLastPathComponent().standardizedFileURL
+            if parent.path == current.path || parent.path.isEmpty || parent.path.hasSuffix("/..") { break }
+            result.append(parent)
+            current = parent
+        }
+        return result
+    }
+
     /// リスト表示の起点を 1 つ上の階層にする
     /// 外付け・ディスクイメージなどのドライブの一番上からは /Volumes に行かず、よく使う項目・ドライブの一覧に戻る
     static func goUp(rootPath: inout String, browser: BrowserState) {
