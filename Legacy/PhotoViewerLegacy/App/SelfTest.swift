@@ -151,9 +151,31 @@ enum SelfTest {
             snapshot("範囲選択", content())
         }
 
+        // 複数選択中の選択済みセルを押して離す（ドラッグなし）→ 少し後で 1 つだけの選択になる
+        step("選択済みのセルを押して離す", wait: 1.2) {
+            if let p = cellCenter(2) {
+                let cv = grid()
+                cv.mouseDown(with: mouse(.leftMouseDown, cv, p))
+                cv.mouseUp(with: mouse(.leftMouseUp, cv, p))
+            }
+        }
+        step("1 つにまとまったかの確認") {
+            check("押して離すと、押したセルだけの選択になる", browser.selection.count == 1
+                    && browser.primarySelection == browser.displayedItems[safe: 2]?.url)
+        }
+        step("ドラッグで渡すものの確認") {
+            let cv = grid()
+            let writer = cv.pasteboardWriter(at: IndexPath(item: 0, section: 0)) as? NSURL
+            check("ドラッグで渡すのはファイルの URL", (writer as URL?) == browser.displayedItems.first?.url)
+        }
+
         // 矢印キー（行の端で回り込む）
         step("グリッドにフォーカス", wait: 0.5) {
-            if let p = cellCenter(0) { click(grid(), at: p) }
+            // 普通のクリックはテスト環境では選択されないので、最初のセルを直接選ぶ
+            if let u = browser.displayedItems.first?.url {
+                browser.updateSelection([u], lastAdded: u)
+                grid().resetAnchor(to: IndexPath(item: 0, section: 0))
+            }
             wc.split.grid.focus()
         }
         let right = String(Character(UnicodeScalar(NSRightArrowFunctionKey)!))

@@ -167,6 +167,15 @@ struct PhotoGridView: NSViewRepresentable {
             notifySelection(lastAddedPaths: added)
         }
 
+        // Finder などへのドラッグ（1 枚、または未選択のセルから始めたとき。複数選択中は PhotoCollectionView が行う）
+        func collectionView(_ collectionView: NSCollectionView, canDragItemsAt indexPaths: Set<IndexPath>,
+                            with event: NSEvent) -> Bool { true }
+
+        func collectionView(_ collectionView: NSCollectionView,
+                            pasteboardWriterForItemAt indexPath: IndexPath) -> (any NSPasteboardWriting)? {
+            (collectionView as? PhotoCollectionView)?.pasteboardWriter(at: indexPath)
+        }
+
         func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
             (collectionView as? PhotoCollectionView)?.resetAnchor(to: indexPaths.max())
             notifySelection(lastAddedPaths: indexPaths)

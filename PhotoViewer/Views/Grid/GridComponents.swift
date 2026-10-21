@@ -205,19 +205,84 @@ final class PhotoCollectionView: NSCollectionView {
             return
         }
         if selectionIndexPaths.contains(path) && selectionIndexPaths.count > 1 {
-            // 複数選択中の選択済みセル：ダブルクリックかもしれないので、すぐには 1 つにしない
+            // 複数選択中の選択済みセル：ダブルクリックやドラッグかもしれないので、すぐには 1 つにしない
+            // （ボタンを離したときに、ドラッグしていなければ 1 つにする）
             anchor = path
             anchorBase = [path]
-            let work = DispatchWorkItem { [weak self] in
-                self?.applyClickSelection([path], added: [path])
-            }
-            pendingCollapse = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
+            dragStart = (event.locationInWindow, event, path)
             return
         }
         super.mouseDown(with: event)
         anchor = path
         anchorBase = selectionIndexPaths
+    }
+
+    /// 複数選択中の選択済みセルを押した位置（ここからドラッグを始められるようにする）
+    private var dragStart: (point: NSPoint, event: NSEvent, path: IndexPath)?
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = dragStart else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let p = event.locationInWindow
+        guard hypot(p.x - start.point.x, p.y - start.point.y) > 3 else { return }
+        dragStart = nil
+        beginDraggingSelection(with: start.event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let start = dragStart else {
+            super.mouseUp(with: event)
+            return
+        }
+        dragStart = nil
+        // ドラッグしなかった：ダブルクリックでなければ、少し後で押したセルだけの選択にする
+        let path = start.path
+        let work = DispatchWorkItem { [weak self] in
+            self?.applyClickSelection([path], added: [path])
+        }
+        pendingCollapse = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
+    }
+
+    // MARK: - Finder などへのドラッグ
+
+    /// 選択中のファイルをドラッグする（複数選択中の選択済みセルから始めたとき。1 枚だけのときは標準の動作に任せる）
+    private func beginDraggingSelection(with event: NSEvent) {
+        pendingCollapse?.cancel()
+        pendingCollapse = nil
+        var items: [NSDraggingItem] = []
+        for path in selectionIndexPaths.sorted() {
+            guard let url = urlsForIndexPaths?([path]).first else { continue }
+            let drag = NSDraggingItem(pasteboardWriter: url as NSURL)
+            if let cell = item(at: path), let rep = cell.view.bitmapImageRepForCachingDisplay(in: cell.view.bounds) {
+                cell.view.cacheDisplay(in: cell.view.bounds, to: rep)
+                let image = NSImage(size: cell.view.bounds.size)
+                image.addRepresentation(rep)
+                drag.setDraggingFrame(cell.view.frame, contents: image)
+            } else {
+                // 画面の外のセルは、押した位置にファイルのアイコンを出す
+                let p = convert(event.locationInWindow, from: nil)
+                drag.setDraggingFrame(NSRect(x: p.x - 16, y: p.y - 16, width: 32, height: 32),
+                                      contents: NSWorkspace.shared.icon(forFile: url.path))
+            }
+            items.append(drag)
+        }
+        guard !items.isEmpty else { return }
+        beginDraggingSession(with: items, event: event, source: self)
+    }
+
+    /// コピーか移動かはドロップ先（Finder）の決まりに任せる
+    /// 同じディスク内は移動、別のディスクはコピー、⌥ でコピー、⌘ で移動、⌥⌘ でエイリアス。アプリ内へのドロップは受け付けない
+    override func draggingSession(_ session: NSDraggingSession,
+                                  sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .outsideApplication ? [.copy, .move, .link, .generic] : []
+    }
+
+    /// ドラッグで渡すもの（グリッドのデリゲートから使う）
+    func pasteboardWriter(at indexPath: IndexPath) -> NSPasteboardWriting? {
+        urlsForIndexPaths?([indexPath]).first.map { $0 as NSURL }
     }
 
     private func applyClickSelection(_ selection: Set<IndexPath>, added: Set<IndexPath>) {
