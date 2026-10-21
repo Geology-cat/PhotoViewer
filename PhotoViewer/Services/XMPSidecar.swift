@@ -21,7 +21,9 @@ enum XMPError: LocalizedError {
     }
 }
 
+#if !LEGACY
 /// サイドカーへの書き込みを 1 件ずつ順番に行う（同じファイルへの同時書き込みで内容が失われるのを防ぐ）
+/// （レガシー版は actor が使えないため、別のファイルで GCD のキューを使って同じことをする）
 actor SidecarWriter {
     static let shared = SidecarWriter()
 
@@ -45,6 +47,7 @@ actor SidecarWriter {
         return failed
     }
 }
+#endif
 
 /// XMP サイドカー（<ベース名>.xmp）の読み書き
 /// 既存のサイドカーは XML として読み込み、対象の項目だけを書き換えて他の情報（Lightroom の現像設定など）は残す

@@ -106,10 +106,22 @@ private struct TIFFFile {
 
     // MARK: 読み込み
 
+    /// 指定位置から count バイト読む（足りなければ nil）
+    /// pread を使う（FileHandle の新しい API は macOS 10.15 以降で、古い API は読み取りエラーで例外を投げて落ちるため）
     private static func read(_ fh: FileHandle, _ offset: UInt64, _ count: Int) -> Data? {
-        guard count >= 0, (try? fh.seek(toOffset: offset)) != nil,
-              let d = try? fh.read(upToCount: count), d.count == count else { return nil }
-        return d
+        guard count >= 0 else { return nil }
+        var d = Data(count: count)
+        var done = 0
+        let ok = d.withUnsafeMutableBytes { (buf: UnsafeMutableRawBufferPointer) -> Bool in
+            while done < count {
+                let n = pread(fh.fileDescriptor, buf.baseAddress! + done, count - done, off_t(offset) + off_t(done))
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { return false }
+                done += n
+            }
+            return true
+        }
+        return ok ? d : nil
     }
 
     private static func u16(_ d: Data, _ i: Int, _ be: Bool) -> UInt32 {

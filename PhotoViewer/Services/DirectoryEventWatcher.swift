@@ -7,11 +7,19 @@ import Foundation
 final class DirectoryEventWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private var watchedPaths: [String] = []
+    #if LEGACY
+    private let handler: ([String]) -> Void
+
+    init(handler: @escaping ([String]) -> Void) {
+        self.handler = handler
+    }
+    #else
     private let handler: @MainActor ([String]) -> Void
 
     init(handler: @escaping @MainActor ([String]) -> Void) {
         self.handler = handler
     }
+    #endif
 
     deinit { stop() }
 
@@ -30,7 +38,11 @@ final class DirectoryEventWatcher: @unchecked Sendable {
             let watcher = Unmanaged<DirectoryEventWatcher>.fromOpaque(info).takeUnretainedValue()
             let paths = (unsafeBitCast(eventPaths, to: NSArray.self) as? [String]) ?? []
             // メインキューで受け取る設定なので、ここはメインスレッド
+            #if LEGACY
+            watcher.handler(paths)
+            #else
             MainActor.assumeIsolated { watcher.handler(paths) }
+            #endif
         }
         let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer)
         guard let s = FSEventStreamCreate(nil, callback, &context, paths as CFArray,

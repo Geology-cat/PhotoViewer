@@ -1,7 +1,6 @@
-import CryptoKit
+import CommonCrypto
 import Foundation
 import ImageIO
-import UniformTypeIdentifiers
 
 /// 読むのに時間がかかる大きなファイル（数百 MB の TIF など）の縮小画像をディスクに保存する
 /// - 場所：~/Library/Caches/com.geologycat.PhotoViewer/Thumbnails
@@ -28,7 +27,11 @@ final class ThumbnailDiskCache: Sendable {
         fresh.removeAllCachedResourceValues()
         guard let v = try? fresh.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return nil }
         let source = "\(url.standardizedFileURL.path)|\(v.fileSize ?? 0)|\(v.contentModificationDate?.timeIntervalSince1970 ?? 0)"
-        let hash = SHA256.hash(data: Data(source.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+        // SHA-256 の先頭 16 バイト（CryptoKit は macOS 10.15 以降なので、レガシー版と共有できる CommonCrypto を使う）
+        let bytes = Array(source.utf8)
+        var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        CC_SHA256(bytes, CC_LONG(bytes.count), &digest)
+        let hash = digest.prefix(16).map { String(format: "%02x", $0) }.joined()
         return directory.appendingPathComponent("\(hash)_\(bucket).jpg")
     }
 
@@ -42,7 +45,7 @@ final class ThumbnailDiskCache: Sendable {
     func write(_ image: CGImage, for url: URL, bucket: Int) {
         guard let file = fileURL(for: url, bucket: bucket) else { return }
         let temp = file.appendingPathExtension("tmp")
-        guard let dest = CGImageDestinationCreateWithURL(temp as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
+        guard let dest = CGImageDestinationCreateWithURL(temp as CFURL, "public.jpeg" as CFString, 1, nil)
         else { return }
         CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else {

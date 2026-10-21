@@ -15,6 +15,17 @@ struct GridAndPreviewTests {
         #expect(PhotoCollectionView.horizontalTarget(from: nil, delta: -1, count: 10) == 9)
     }
 
+    @Test func 上下キーは1行下と上へ() {
+        // 4 列・10 件（最後の行は 8, 9 の 2 件）
+        #expect(PhotoCollectionView.verticalTarget(from: 3, delta: 1, columns: 4, count: 10) == 7)
+        #expect(PhotoCollectionView.verticalTarget(from: 7, delta: -1, columns: 4, count: 10) == 3)
+        // 下の行が短いときはその行の最後へ
+        #expect(PhotoCollectionView.verticalTarget(from: 7, delta: 1, columns: 4, count: 10) == 9)
+        // 一番下・一番上の行では止まる
+        #expect(PhotoCollectionView.verticalTarget(from: 9, delta: 1, columns: 4, count: 10) == 9)
+        #expect(PhotoCollectionView.verticalTarget(from: 2, delta: -1, columns: 4, count: 10) == 2)
+    }
+
     @Test func 拡大率100パーセントは画像の1ピクセルを画面の1ピクセルにする() {
         // 6000×4000 の写真を 300×200 pt で全体表示、Retina（2 倍）の画面
         let z = ZoomGeometry.zoomSize(fit: CGSize(width: 300, height: 200), originalLongSide: 6000,

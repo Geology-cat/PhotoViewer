@@ -3,11 +3,13 @@ import ImageIO
 
 /// ImageIO で撮影情報を読み取る（UI に依存しない。どのスレッドからでも呼べる）
 enum MetadataReader {
+    #if !LEGACY
     /// 写真でも動画でも読める（動画は AVFoundation で読む）
     static func readAny(url: URL) async -> PhotoMetadata {
         if SupportedFormats.isVideo(url) { return await VideoSupport.metadata(of: url) }
         return read(url: url)
     }
+    #endif
 
     static func read(url: URL) -> PhotoMetadata {
         // 大きな TIF はタグだけを読む（ImageIO はファイル全体を読むため、数百 MB だと 10 秒以上かかる）
@@ -36,10 +38,11 @@ enum MetadataReader {
         let tiff = p[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
         let exifAux = p[kCGImagePropertyExifAuxDictionary] as? [CFString: Any] ?? [:]
 
+        // OffsetTimeOriginal は kCGImagePropertyExifOffsetTimeOriginal と同じ（定数は macOS 10.15 以降なので文字列で書く。レガシー版と共有するため）
         if let s = exif[kCGImagePropertyExifDateTimeOriginal] as? String
             ?? exif[kCGImagePropertyExifDateTimeDigitized] as? String
             ?? tiff[kCGImagePropertyTIFFDateTime] as? String {
-            m.captureDate = parseExifDate(s, offset: exif[kCGImagePropertyExifOffsetTimeOriginal] as? String)
+            m.captureDate = parseExifDate(s, offset: exif["OffsetTimeOriginal" as CFString] as? String)
         }
         if let isos = exif[kCGImagePropertyExifISOSpeedRatings] as? [NSNumber], let first = isos.first {
             m.iso = first.intValue

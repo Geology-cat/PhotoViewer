@@ -4,6 +4,7 @@ import Foundation
 
 /// 動画のサムネイルと撮影情報（AVFoundation を使う）
 enum VideoSupport {
+    #if !LEGACY
     /// サムネイル：冒頭から少し進んだ所（1 秒、短い動画なら長さの 1/3）の 1 コマ
     static func thumbnail(of url: URL, maxPixel: Int) async -> CGImage? {
         let asset = AVURLAsset(url: url)
@@ -62,11 +63,15 @@ enum VideoSupport {
         }
         return m
     }
+    #endif
 
     /// 「2023-10-17T14:05:09+0900」などの日時
     static func parseISODate(_ s: String) -> Date? {
         let iso = ISO8601DateFormatter()
-        for options: ISO8601DateFormatter.Options in [[.withInternetDateTime], [.withInternetDateTime, .withFractionalSeconds]] {
+        var optionList: [ISO8601DateFormatter.Options] = [[.withInternetDateTime]]
+        // 小数の秒は macOS 10.13 以降（10.12 では下の DateFormatter で読む）
+        if #available(macOS 10.13, *) { optionList.append([.withInternetDateTime, .withFractionalSeconds]) }
+        for options in optionList {
             iso.formatOptions = options
             if let d = iso.date(from: s) { return d }
         }

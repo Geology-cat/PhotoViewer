@@ -44,6 +44,20 @@ open build/Build/Products/Debug/PhotoViewer.app
 - 負荷試験：`PV_STRESS=1 PV_STRESS_FOLDERS=<フォルダ:フォルダ…>` で起動すると、スクロール・並べ替え・検索・絞り込み・右列の開閉・戻る/進むなどを自動で繰り返して終了する。★の連続書き込みは `PV_STRESS_WRITE=<TestData のフォルダ>` を指定したときだけ行う。設定（UserDefaults）を書き換えるので、事前に `defaults export com.geologycat.PhotoViewer` で控えて、終わったら戻す。
 - `contentsOfDirectory` などで得た URL は中身が NSURL のままで、辞書のキーや比較に使うと日本語のパスでは非常に遅い。`PhotoItem` は `swiftNative(isDirectory:)` で作り直した URL を持つ。
 
+## レガシー版（macOS 10.12 向け、`Legacy/`）
+仕様と方針は `レガシー版開発計画書.md`。通常版と同じ機能を AppKit だけで作った別アプリ（PhotoViewer Legacy、`com.geologycat.PhotoViewerLegacy`）。
+```bash
+./Legacy/Scripts/build.sh            # Debug ビルド（Xcode 16.4 を使う。Xcode 27 は 10.12 向けにビルドできない）
+./Legacy/Scripts/build.sh test       # テスト（この Mac では Rosetta 2 で動く）
+./Legacy/Scripts/build.sh release    # dist/PhotoViewer Legacy.app
+./Legacy/Scripts/build_dmg.sh        # dist/PhotoViewerLegacy-<バージョン>.dmg（HFS+。10.12 は APFS の DMG を開けない）
+```
+- **処理部分は通常版のファイルを共有する**（`Legacy/project.yml` の sources を参照）。共有ファイルでは、10.12 で使えないもの（async/await・actor・`MainActor`・CryptoKit・UTType・新しい FileHandle API など）を使わないか、`#if LEGACY` / `#available` で切り替える。共有ファイルを変えたら両方をビルドする。
+- 共有している主なもの：Models、FolderScanner、PhotoFilter、RenameService、TIFFCompositeReader、MetadataReader、XMPSidecar、ThumbnailDiskCache、ThumbnailLoader、VideoSupport、DirectoryEventWatcher、GridSettings、`Views/Grid/GridComponents.swift`（グリッドの並べ方・クリック・キー操作・Quick Look）、`Views/Inspector/PreviewGeometry.swift`（拡大・回転の計算）。
+- レガシー版だけのもの：`BrowserModel`（状態。変更は NotificationCenter で知らせる）、GCD 版の読み込み（`LegacyLoaders.swift`）、AppKit の画面、コードで描いたアイコン（`LegacyIcons`。SF Symbols は 11 以降）。
+- 自動の動作確認：`PV_SELFTEST=<画像の保存先> PV_SELFTEST_FOLDER=<TestData/基本> PV_SELFTEST_VIDEO=<TestData/動画> "Legacy/build/Build/Products/Debug/PhotoViewer Legacy.app/Contents/MacOS/PhotoViewer Legacy"`。マウス・キーのイベントを送って結果を標準エラー出力に書き、場面ごとの画面を保存する（★の書き込みは TestData で行い元に戻す）。普通のクリックだけは、テスト環境では OS の選択処理が働かないため不合格になる（実機で確認する）。
+- 予備：Xcode 13.4.1（`~/Library/Developer/Xcode13/Xcode.app`、10.12 を正式に扱える最後の版）もこの Mac で動く。ただし Swift 5.6 なので、共有コードの新しい書き方（switch 式など）はそのままではビルドできない。
+
 ## 技術的な決定事項
 | 項目 | 決定 |
 |------|------|

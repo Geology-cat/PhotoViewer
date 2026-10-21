@@ -48,6 +48,10 @@ Adobe Bridge の代わりに使う、軽量な macOS 用の写真閲覧アプリ
 | ⌥⌘← ／ ⌥⌘→ | プレビューを左／右に 90° 回転 |
 | ⌘, | 環境設定 |
 
+## レガシー版（macOS 10.12 向け）
+
+macOS 10.12 Sierra でも使える「PhotoViewer Legacy」を `Legacy/` で開発しています（機能は通常版と同じ。HEIC・HEVC 動画・CR3 など、10.12 の OS が読めない形式は表示できません）。
+
 ## ビルド
 ```bash
 brew install xcodegen

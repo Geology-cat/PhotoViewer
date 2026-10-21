@@ -1,21 +1,5 @@
 import AppKit
 
-/// クロージャで動作を指定できるメニュー項目
-final class ClosureMenuItem: NSMenuItem {
-    private let handler: () -> Void
-
-    init(_ title: String, image: NSImage? = nil, handler: @escaping () -> Void) {
-        self.handler = handler
-        super.init(title: title, action: #selector(run), keyEquivalent: "")
-        self.target = self
-        self.image = image
-    }
-
-    required init(coder: NSCoder) { fatalError("未対応") }
-
-    @objc private func run() { handler() }
-}
-
 /// グリッドの右クリックメニュー
 @MainActor
 enum GridContextMenu {

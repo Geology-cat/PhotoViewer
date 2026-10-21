@@ -9,12 +9,14 @@ private final class ImageBox {
     init(_ image: CGImage) { self.image = image }
 }
 
+#if !LEGACY
 /// 取り消しの印（GCD のキューで待っている間に取り消されたら、読まずに終わるため）
 private final class CancelFlag: Sendable {
     private let state = OSAllocatedUnfairLock(initialState: false)
     var isCancelled: Bool { state.withLock { $0 } }
     func cancel() { state.withLock { $0 = true } }
 }
+#endif
 
 /// サムネイル・プレビュー画像の生成とキャッシュ
 /// - メモリキャッシュ（NSCache）に加え、読むのに時間がかかる大きなファイルはディスクにも保存する
@@ -24,8 +26,8 @@ final class ThumbnailLoader: @unchecked Sendable {
     static let shared = ThumbnailLoader()
 
     private let cache = NSCache<NSString, ImageBox>()
-    /// 大きなファイルを順番に読むためのキュー
-    private let largeFileQueue = DispatchQueue(label: "com.geologycat.PhotoViewer.largeFile", qos: .userInitiated)
+    /// 大きなファイルを順番に読むためのキュー（レガシー版の読み込みでも使う）
+    let largeFileQueue = DispatchQueue(label: "com.geologycat.PhotoViewer.largeFile", qos: .userInitiated)
 
     /// この大きさ以上のファイルは 1 枚ずつ読む
     static let largeFileThreshold: Int64 = 64 * 1024 * 1024
@@ -64,10 +66,11 @@ final class ThumbnailLoader: @unchecked Sendable {
         }
     }
 
-    private func store(_ image: CGImage, _ url: URL, _ bucket: Int) {
+    func store(_ image: CGImage, _ url: URL, _ bucket: Int) {
         cache.setObject(ImageBox(image), forKey: key(url, bucket), cost: image.bytesPerRow * image.height)
     }
 
+    #if !LEGACY
     /// 画像を用意する（バックグラウンドで呼ぶこと）
     /// 1. メモリキャッシュ → 2. メモリ内のより大きい画像を縮小 → 3. ディスクキャッシュ → 4. ファイルから生成
     /// - Parameter allowFullDecode: 埋め込みプレビューが小さすぎるとき、RAW でも本体からデコードし直すか
@@ -135,6 +138,8 @@ final class ThumbnailLoader: @unchecked Sendable {
             flag.cancel()
         }
     }
+
+    #endif
 
     /// 長辺が maxPixel になるよう縮小する（すでに小さければ nil）
     static func downscale(_ image: CGImage, maxPixel: Int) -> CGImage? {
