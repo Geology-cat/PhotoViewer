@@ -101,6 +101,14 @@ struct FolderOutlineView: NSViewRepresentable {
         weak var outline: FolderOutline?
         private var roots: [FolderItem] = []
         private var cache: [String: FolderItem] = [:]
+        /// パス → そのフォルダを表す項目（同じフォルダが複数の場所に出ることがある）
+        private var itemsByPath: [String: [FolderItem]] = [:]
+        /// 起点フォルダの項目（一覧表示のときは nil）
+        private var rootItem: FolderItem?
+        /// 表示中のフォルダ以下の変更を受け取り、フォルダの追加・削除をすぐに反映する
+        private lazy var directoryWatcher = DirectoryEventWatcher { [weak self] paths in
+            self?.directoriesChanged(paths)
+        }
         private var signature = ""
         private var isApplyingSelection = false
 
@@ -114,6 +122,7 @@ struct FolderOutlineView: NSViewRepresentable {
             }
             let it = FolderItem(key: key, kind: kind, url: url, title: title)
             cache[key] = it
+            if let path = url?.standardizedFileURL.path { itemsByPath[path, default: []].append(it) }
             return it
         }
 
@@ -141,10 +150,12 @@ struct FolderOutlineView: NSViewRepresentable {
 
             if let root = p.root {
                 let rootItem = item(key: "root>\(root.path)", kind: .folder, url: root, title: FolderTree.displayName(root))
+                self.rootItem = rootItem
                 roots = rootItem.children ?? []
                 // 前に読んだ子があればまず表示し、読み直して変化があれば差し替える
                 load(rootItem, isRoot: true)
             } else {
+                rootItem = nil
                 var sections: [FolderItem] = []
                 let fav = item(key: "sec>fav", kind: .section("よく使う項目"), url: nil, title: "よく使う項目")
                 fav.children = p.favorites.map { folderItem($0, parentKey: "fav") }
@@ -163,6 +174,23 @@ struct FolderOutlineView: NSViewRepresentable {
             outline.reloadData()
             for r in roots where r.isSection { outline.expandItem(r) }
             restoreExpanded(expanded)
+            // 起点（一覧のときはよく使う項目と各ドライブ）以下を監視する
+            directoryWatcher.watch(p.root.map { [$0.path] } ?? (p.favorites.map(\.path) + p.volumes.map(\.url.path)))
+        }
+
+        /// 中身が変わったフォルダを読み直す（子を読み込み済みの項目だけ。読み直しは変化があったときだけ描き直す）
+        private func directoriesChanged(_ paths: [String]) {
+            for raw in paths {
+                var path = raw
+                while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+                for item in itemsByPath[path] ?? [] {
+                    if item === rootItem {
+                        load(item, isRoot: true)
+                    } else if item.children != nil {
+                        load(item)
+                    }
+                }
+            }
         }
 
         private func expandedKeys() -> [String] {
