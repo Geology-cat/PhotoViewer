@@ -73,6 +73,12 @@ final class MainSplitViewController: NSSplitViewController {
         UserDefaults.standard.set(!inspectorItem.isCollapsed, forKey: Self.inspectorVisibleKey)
     }
 
+    /// 外部から画像を開いたときは、閉じていたプレビューも表示する。
+    func showInspector() {
+        inspectorItem.isCollapsed = false
+        UserDefaults.standard.set(true, forKey: Self.inspectorVisibleKey)
+    }
+
     /// 境界のドラッグで閉じたときも状態を保存する
     override func splitViewDidResizeSubviews(_ notification: Notification) {
         super.splitViewDidResizeSubviews(notification)

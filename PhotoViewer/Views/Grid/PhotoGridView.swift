@@ -95,7 +95,9 @@ struct PhotoGridView: NSViewRepresentable {
                 != c.currentIDs.first?.deletingLastPathComponent()
             c.itemsByURL = Dictionary(items.map { ($0.url, $0) }, uniquingKeysWith: { a, _ in a })
             c.currentIDs = ids
+            c.isApplyingSelection = true
             ds.apply(ids)
+            c.isApplyingSelection = false
             if folderChanged {
                 cv.scroll(.zero)
             }
@@ -115,6 +117,10 @@ struct PhotoGridView: NSViewRepresentable {
             c.isApplyingSelection = true
             cv.selectionIndexPaths = Set(selection.compactMap { ds.indexPath(for: $0) })
             c.isApplyingSelection = false
+            if let path = cv.selectionIndexPaths.min() {
+                cv.layoutSubtreeIfNeeded()
+                cv.scrollToItems(at: [path], scrollPosition: .centeredVertically)
+            }
         }
     }
 

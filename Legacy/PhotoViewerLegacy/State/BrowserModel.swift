@@ -96,6 +96,9 @@ final class BrowserModel {
     /// 読み込み中の撮影情報の完了待ち（同じファイルを何度も読まない）
     private var metadataWaiters: [URL: [(PhotoMetadata) -> Void]] = [:]
     private var pendingSelection: (Set<URL>, URL?)?
+    private var externalOpenGeneration = 0
+    private var isOpeningExternal = false
+    private var pendingExternalFileName: String?
 
     private static let lastFolderKey = "lastFolderPath"
     static let listRootKey = "sidebar.listRoot"
@@ -138,13 +141,47 @@ final class BrowserModel {
 
     /// 前回開いていたフォルダを開き直す（存在の確認はバックグラウンドで）
     func restoreLastFolder() {
-        guard currentFolder == nil, let path = UserDefaults.standard.string(forKey: Self.lastFolderKey) else { return }
+        guard currentFolder == nil, !isOpeningExternal,
+              let path = UserDefaults.standard.string(forKey: Self.lastFolderKey) else { return }
         runInBackground({ () -> Bool in
             var isDir: ObjCBool = false
             return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
         }, then: { exists in
-            if exists, self.currentFolder == nil { self.open(folder: URL(fileURLWithPath: path)) }
+            if exists, self.currentFolder == nil, !self.isOpeningExternal { self.open(folder: URL(fileURLWithPath: path)) }
         })
+    }
+
+    /// ファイルの確認はバックグラウンドで行い、最後に届いた要求だけを開く。
+    func openExternalURLs(_ urls: [URL], completion: @escaping (Bool) -> Void) {
+        externalOpenGeneration += 1
+        let generation = externalOpenGeneration
+        isOpeningExternal = true
+        runInBackground({ Result { try ExternalOpenRequest.resolve(urls) } }, then: { result in
+            guard generation == self.externalOpenGeneration else { return }
+            self.isOpeningExternal = false
+            switch result {
+            case .success(let request):
+                self.openExternal(request)
+                completion(request.selection != nil)
+            case .failure(let error):
+                self.onAlert?(error.localizedDescription)
+                completion(false)
+            }
+        })
+    }
+
+    func openExternal(_ request: ExternalOpenRequest) {
+        var cleared = PhotoFilter()
+        cleared.sortKey = filter.sortKey
+        cleared.ascending = filter.ascending
+        filter = cleared
+        includeSubfolders = false
+        let sameFolder = currentFolder == request.folder
+        navigate(listRoot: request.folder.path, folder: request.folder)
+        updateSelection([], lastAdded: nil)
+        pendingSelection = (Set(request.selection.map { [$0] } ?? []), request.selection)
+        pendingExternalFileName = request.selection?.lastPathComponent
+        if sameFolder { reload() }
     }
 
     // MARK: - 戻る・進む
@@ -197,6 +234,10 @@ final class BrowserModel {
     func open(folder: URL, recordHistory: Bool = true) {
         let folder = folder.standardizedFileURL
         guard folder != currentFolder else { return }
+        externalOpenGeneration += 1
+        isOpeningExternal = false
+        pendingSelection = nil
+        pendingExternalFileName = nil
         currentFolder = folder
         watcher.watch(folder)
         bulkMetadataGeneration += 1
@@ -214,6 +255,10 @@ final class BrowserModel {
 
     /// 表示中のフォルダを閉じる（ドライブが外されたときなど）
     func closeFolder() {
+        externalOpenGeneration += 1
+        isOpeningExternal = false
+        pendingSelection = nil
+        pendingExternalFileName = nil
         scanGeneration += 1
         bulkMetadataGeneration += 1
         isBulkLoading = false
@@ -264,6 +309,12 @@ final class BrowserModel {
             let existing = Set(result.items.map(\.url))
             var newSelection = self.selection
             var newPrimary = self.primarySelection
+            // 選択には列挙結果の URL を使う（パスの別表記・日本語の正規化に対応）。
+            if let name = self.pendingExternalFileName {
+                self.pendingExternalFileName = nil
+                let target = result.items.first { $0.name == name }?.url
+                self.pendingSelection = (Set(target.map { [$0] } ?? []), target)
+            }
             if let pending = self.pendingSelection {
                 self.pendingSelection = nil
                 newSelection = pending.0

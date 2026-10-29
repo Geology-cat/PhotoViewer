@@ -67,6 +67,9 @@ final class BrowserState {
     @ObservationIgnored private var pendingWrites: [URL: Int] = [:]
     @ObservationIgnored private lazy var watcher = FolderWatcher { [weak self] in self?.reload() }
     @ObservationIgnored private var metadataTasks: [URL: Task<PhotoMetadata, Never>] = [:]
+    @ObservationIgnored private var externalOpenGeneration = 0
+    @ObservationIgnored private var isOpeningExternal = false
+    @ObservationIgnored private var pendingExternalFileName: String?
 
     private static let lastFolderKey = "lastFolderPath"
 
@@ -88,14 +91,54 @@ final class BrowserState {
     /// 前回開いていたフォルダを開き直す
     /// 存在の確認はバックグラウンドで行う（外付け HDD が止まっていると、確認だけで数秒かかることがある）
     func restoreLastFolder() {
-        guard currentFolder == nil,
+        guard currentFolder == nil, !isOpeningExternal,
               let path = UserDefaults.standard.string(forKey: Self.lastFolderKey) else { return }
         Task {
             let exists = await Task.detached(priority: .userInitiated) {
                 var isDir: ObjCBool = false
                 return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
             }.value
-            if exists, self.currentFolder == nil { self.open(folder: URL(fileURLWithPath: path)) }
+            if exists, self.currentFolder == nil, !self.isOpeningExternal { self.open(folder: URL(fileURLWithPath: path)) }
+        }
+    }
+
+    /// 外部からの要求は、最後に受け取ったものだけを反映する。
+    func openExternalURLs(_ urls: [URL], completion: @escaping () -> Void) {
+        externalOpenGeneration &+= 1
+        let generation = externalOpenGeneration
+        isOpeningExternal = true
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try ExternalOpenRequest.resolve(urls) }
+            }.value
+            guard generation == self.externalOpenGeneration else { return }
+            self.isOpeningExternal = false
+            switch result {
+            case .success(let request): self.openExternal(request)
+            case .failure(let error): self.alertMessage = error.localizedDescription
+            }
+            completion()
+        }
+    }
+
+    /// 読み込み後に選択する画像を予約する。同じフォルダでも新しい要求を反映する。
+    func openExternal(_ request: ExternalOpenRequest) {
+        var cleared = PhotoFilter()
+        cleared.sortKey = filter.sortKey
+        cleared.ascending = filter.ascending
+        filter = cleared
+        includeSubfolders = false
+        UserDefaults.standard.set(request.folder.path, forKey: Self.listRootKey)
+        let sameFolder = currentFolder == request.folder
+        open(folder: request.folder)
+        selection = []
+        primarySelection = nil
+        pendingSelection = (Set(request.selection.map { [$0] } ?? []), request.selection)
+        pendingExternalFileName = request.selection?.lastPathComponent
+        if request.selection != nil { UserDefaults.standard.set(true, forKey: "inspector.visible") }
+        if sameFolder {
+            recordLocation()
+            reload()
         }
     }
 
@@ -149,6 +192,10 @@ final class BrowserState {
     func open(folder: URL, recordHistory: Bool = true) {
         let folder = folder.standardizedFileURL
         guard folder != currentFolder else { return }
+        externalOpenGeneration &+= 1
+        isOpeningExternal = false
+        pendingSelection = nil
+        pendingExternalFileName = nil
         defer { if recordHistory { recordLocation() } }
         currentFolder = folder
         watcher.watch(folder)
@@ -165,6 +212,10 @@ final class BrowserState {
 
     /// 表示中のフォルダを閉じる（ドライブが外されたときなど）
     func closeFolder() {
+        externalOpenGeneration &+= 1
+        isOpeningExternal = false
+        pendingSelection = nil
+        pendingExternalFileName = nil
         scanTask?.cancel()
         bulkMetadataTask?.cancel()
         watcher.stop()
@@ -214,6 +265,12 @@ final class BrowserState {
             self.recomputeDisplayed()
             PerfLog.scanFinished(count: result.items.count)
             let existing = Set(result.items.map(\.url))
+            // パスの別表記や日本語の正規化の違いを避け、列挙結果そのものの URL を選ぶ。
+            if let name = self.pendingExternalFileName {
+                self.pendingExternalFileName = nil
+                let target = result.items.first { $0.name == name }?.url
+                self.pendingSelection = (Set(target.map { [$0] } ?? []), target)
+            }
             if let pending = self.pendingSelection {
                 self.pendingSelection = nil
                 self.selection = pending.0

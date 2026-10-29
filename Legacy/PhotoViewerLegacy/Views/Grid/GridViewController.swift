@@ -188,7 +188,9 @@ final class GridViewController: NSViewController, NSCollectionViewDelegate {
         let folderChanged = items.first?.url.deletingLastPathComponent()
             != dataSource.ids.first?.deletingLastPathComponent()
         itemsByURL = Dictionary(items.map { ($0.url, $0) }, uniquingKeysWith: { a, _ in a })
+        isApplyingSelection = true
         dataSource.apply(items.map(\.url))
+        isApplyingSelection = false
         if folderChanged { collectionView.scroll(.zero) }
         syncSelection()
         updateMessage()
@@ -200,6 +202,10 @@ final class GridViewController: NSViewController, NSCollectionViewDelegate {
         isApplyingSelection = true
         collectionView.selectionIndexPaths = Set(browser.selection.compactMap { dataSource.indexPath(for: $0) })
         isApplyingSelection = false
+        if let path = collectionView.selectionIndexPaths.min() {
+            collectionView.layoutSubtreeIfNeeded()
+            collectionView.scrollToItems(at: [path], scrollPosition: .centeredVertically)
+        }
     }
 
     private func refreshBadges() {

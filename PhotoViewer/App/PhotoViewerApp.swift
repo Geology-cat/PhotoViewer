@@ -3,7 +3,8 @@ import SwiftUI
 
 @main
 struct PhotoViewerApp: App {
-    @State private var browser = BrowserState()
+    @NSApplicationDelegateAdaptor(PhotoViewerAppDelegate.self) private var appDelegate
+    private var browser: BrowserState { appDelegate.browser }
     @State private var tree = FolderTree()
     @State private var settings = AppSettings()
     @AppStorage("inspector.visible") private var showInspector = true
@@ -18,7 +19,7 @@ struct PhotoViewerApp: App {
 
     var body: some Scene {
         Window("PhotoViewer", id: "main") {
-            ContentView()
+            PhotoViewerRootView(appDelegate: appDelegate)
                 .environment(browser)
                 .environment(tree)
                 .environment(settings)

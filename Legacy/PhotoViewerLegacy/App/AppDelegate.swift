@@ -5,13 +5,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let browser = BrowserModel.shared
     private let tree = FolderTreeModel.shared
     private var mainWindow: MainWindowController!
+    private var pendingOpenFiles: [String]?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
         mainWindow = MainWindowController()
         browser.onRenameRequest = { [weak self] urls in self?.showRename(urls) }
         mainWindow.showWindow(nil)
-        browser.restoreLastFolder()
+        if let files = pendingOpenFiles {
+            pendingOpenFiles = nil
+            openFiles(files)
+        } else {
+            browser.restoreLastFolder()
+        }
         // 動作確認用（PV_SELFTEST のときだけ）
         SelfTest.startIfRequested(window: mainWindow)
         // ディスクに保存した縮小画像が多すぎたら、古いものから消す
@@ -19,6 +25,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        if mainWindow == nil {
+            pendingOpenFiles = filenames
+        } else {
+            openFiles(filenames)
+        }
+        sender.reply(toOpenOrPrint: .success)
+    }
+
+    private func openFiles(_ filenames: [String]) {
+        browser.openExternalURLs(filenames.map { URL(fileURLWithPath: $0) }) { [weak self] hasSelection in
+            guard let self = self else { return }
+            if hasSelection { self.mainWindow.split.showInspector() }
+            self.mainWindow.showWindow(nil)
+            self.mainWindow.window?.deminiaturize(nil)
+            self.mainWindow.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
 
     // MARK: - メニュー
 
